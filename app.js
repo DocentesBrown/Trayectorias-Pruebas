@@ -57,7 +57,8 @@ let state = {
   orientaciones: [],
   originalByMateria: new Map(), // id_materia -> snapshot
   dirtyByMateria: new Map(),     // id_materia -> fields changed
-  filters: { course: '', onlyPending: false, onlyRisk: false }
+  filters: { course: '', onlyPending: false, onlyRisk: false },
+  pickerJustOpenedAt: 0
 
 };
 
@@ -93,7 +94,12 @@ async function apiCall(action, payload) {
 function isMobile_(){
   return window.matchMedia && window.matchMedia('(max-width: 980px)').matches;
 }
+
+// Prevent "open then instantly close" on mobile when the same tap triggers the backdrop.
+let pickerOpenedAt_ = 0;
+
 function openStudentPicker_(){
+  pickerOpenedAt_ = Date.now();
   document.body.classList.add('picker-open');
   const bd = $('studentsBackdrop');
   if (bd) bd.classList.remove('hidden');
@@ -218,10 +224,11 @@ function courseLabel_(s){
 }
 
 function rebuildCourseOptions(list){
-  const sel = $('courseFilter');
-  if (!sel) return;
+  const sels = [$('courseFilter'), $('courseFilterTop')].filter(Boolean);
+  if (sels.length === 0) return;
 
-  const current = state.filters.course || sel.value || '';
+  // prefer state, otherwise read from any existing select
+  const current = state.filters.course || (sels[0] ? sels[0].value : '') || '';
   const map = new Map();
 
   (list || []).forEach(s => {
@@ -238,22 +245,40 @@ function rebuildCourseOptions(list){
     return String(a[1]).localeCompare(String(b[1]));
   });
 
-  sel.innerHTML = `<option value="">Todos los cursos</option>`;
-  entries.forEach(([key,label]) => {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = label;
-    sel.appendChild(opt);
+  sels.forEach(sel => {
+    sel.innerHTML = `<option value="">Todos los cursos</option>`;
+    entries.forEach(([key,label]) => {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = label;
+      sel.appendChild(opt);
+    });
   });
 
-  // reponer selección si sigue existiendo
+  // reponer selección si sigue existiendo (y sincronizar ambos)
   if (current && map.has(current)) {
-    sel.value = current;
     state.filters.course = current;
   } else {
-    sel.value = '';
     state.filters.course = '';
   }
+  sels.forEach(sel => { sel.value = state.filters.course; });
+}
+
+function syncFiltersUI_(){
+  const cf = $('courseFilter');
+  const cft = $('courseFilterTop');
+  if (cf) cf.value = state.filters.course || '';
+  if (cft) cft.value = state.filters.course || '';
+
+  const op = $('onlyPending');
+  const opt = $('onlyPendingTop');
+  if (op) op.checked = !!state.filters.onlyPending;
+  if (opt) opt.checked = !!state.filters.onlyPending;
+
+  const or = $('onlyRisk');
+  const ort = $('onlyRiskTop');
+  if (or) or.checked = !!state.filters.onlyRisk;
+  if (ort) ort.checked = !!state.filters.onlyRisk;
 }
 
 function escapeHtml(str) {
@@ -861,6 +886,7 @@ async function loadStudents() {
   const data = await apiCall('getStudentList', { ciclo_lectivo: state.ciclo });
   state.students = data.students || [];
   rebuildCourseOptions(state.students);
+  syncFiltersUI_();
   renderStudents(state.students);
 
   // Mobile UX: open picker automatically the first time
@@ -1083,17 +1109,35 @@ $('btnRollover').onclick = async () => {
 
 $('studentSearch').oninput = () => renderStudents(state.students);
 
-  // filtros estudiantes
-  if ($('courseFilter')) $('courseFilter').onchange = () => {
-    state.filters.course = $('courseFilter').value;
+  // filtros estudiantes (mobile dentro del picker + desktop en barra superior)
+  const onCourseChange_ = (val) => {
+    state.filters.course = val || '';
+    syncFiltersUI_();
     renderStudents(state.students);
   };
-  if ($('onlyPending')) $('onlyPending').onchange = () => {
-    state.filters.onlyPending = $('onlyPending').checked;
+  const onPendingChange_ = (checked) => {
+    state.filters.onlyPending = !!checked;
+    syncFiltersUI_();
     renderStudents(state.students);
   };
-  if ($('onlyRisk')) $('onlyRisk').onchange = () => {
-    state.filters.onlyRisk = $('onlyRisk').checked;
+  const onRiskChange_ = (checked) => {
+    state.filters.onlyRisk = !!checked;
+    syncFiltersUI_();
+    renderStudents(state.students);
+  };
+
+  if ($('courseFilter')) $('courseFilter').onchange = () => onCourseChange_($('courseFilter').value);
+  if ($('courseFilterTop')) $('courseFilterTop').onchange = () => onCourseChange_($('courseFilterTop').value);
+  if ($('onlyPending')) $('onlyPending').onchange = () => onPendingChange_($('onlyPending').checked);
+  if ($('onlyPendingTop')) $('onlyPendingTop').onchange = () => onPendingChange_($('onlyPendingTop').checked);
+  if ($('onlyRisk')) $('onlyRisk').onchange = () => onRiskChange_($('onlyRisk').checked);
+  if ($('onlyRiskTop')) $('onlyRiskTop').onchange = () => onRiskChange_($('onlyRiskTop').checked);
+
+  if ($('btnClearFiltersTop')) $('btnClearFiltersTop').onclick = () => {
+    state.filters.course = '';
+    state.filters.onlyPending = false;
+    state.filters.onlyRisk = false;
+    syncFiltersUI_();
     renderStudents(state.students);
   };
 
@@ -1120,7 +1164,11 @@ $('cicloSelect').onchange = async () => {
   if ($('btnShowDetail')) $('btnShowDetail').onclick = () => closeStudentPicker_();
   if ($('btnBackStudents')) $('btnBackStudents').onclick = () => openStudentPicker_();
   if ($('btnCloseStudents')) $('btnCloseStudents').onclick = () => closeStudentPicker_();
-  if ($('studentsBackdrop')) $('studentsBackdrop').onclick = () => closeStudentPicker_();
+  if ($('studentsBackdrop')) $('studentsBackdrop').onclick = () => {
+    // Ignore the "same tap" that just opened the picker
+    if (Date.now() - pickerOpenedAt_ < 250) return;
+    closeStudentPicker_();
+  };
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeStudentPicker_();
   });

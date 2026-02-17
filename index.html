@@ -30,6 +30,19 @@
     <button id="btnTopMenu" class="btn ghost mobile-only" type="button">Menú</button>
   </header>
 
+  <!-- Desktop only: filtros horizontales debajo del header (no sticky) -->
+  <div id="desktopFiltersBar" class="desktop-filters desktop-only" aria-label="Filtros">
+    <div class="df-inner">
+      <div class="df-title">Filtros</div>
+      <select id="courseFilterTop" class="select">
+        <option value="">Todos los cursos</option>
+      </select>
+      <label class="chk"><input type="checkbox" id="onlyPendingTop" /> Faltan cargar</label>
+      <label class="chk"><input type="checkbox" id="onlyRiskTop" /> En riesgo</label>
+      <button id="btnClearFiltersTop" class="btn ghost" type="button">Limpiar</button>
+    </div>
+  </div>
+
   <main class="container">
     <!-- Gate API key -->
     <section id="gate" class="card gate">
@@ -59,7 +72,7 @@
             <button id="btnCloseStudents" class="btn ghost mobile-only" type="button">Cerrar</button>
           </div>
           <input id="studentSearch" class="input" placeholder="Buscar por nombre, división o ID…" />
-          <div class="filters">
+          <div class="filters mobile-only">
             <select id="courseFilter" class="select">
               <option value="">Todos los cursos</option>
             </select>
