@@ -95,11 +95,37 @@ function isMobile_(){
   return window.matchMedia && window.matchMedia('(max-width: 980px)').matches;
 }
 
+function showAppLoader_(text){
+  const l = $('appLoader');
+  if (!l) return;
+  const t = $('appLoaderText');
+  if (t) t.textContent = text || 'Cargando…';
+  l.classList.remove('hidden');
+  document.body.classList.add('app-busy');
+}
+function hideAppLoader_(){
+  const l = $('appLoader');
+  if (l) l.classList.add('hidden');
+  document.body.classList.remove('app-busy');
+}
+function pulseTopLoader_(){
+  const b = $('topLoader');
+  if (!b) return;
+  b.classList.remove('hidden');
+  b.classList.add('run');
+  setTimeout(() => {
+    b.classList.remove('run');
+    b.classList.add('hidden');
+  }, 550);
+}
+
 // Prevent "open then instantly close" on mobile when the same tap triggers the backdrop.
 let pickerOpenedAt_ = 0;
+let isPickingStudent_ = false;
 
 function openStudentPicker_(){
   pickerOpenedAt_ = Date.now();
+  isPickingStudent_ = true;
   document.body.classList.add('picker-open');
   const bd = $('studentsBackdrop');
   if (bd) bd.classList.remove('hidden');
@@ -107,10 +133,15 @@ function openStudentPicker_(){
   if (students) students.classList.remove('hidden-mobile');
   setTimeout(() => {
     const inp = $('studentSearch');
-    if (inp) inp.focus();
+    if (inp) {
+      inp.value = '';
+      inp.focus();
+    }
+    if (state.students) renderStudents(state.students);
   }, 60);
 }
 function closeStudentPicker_(){
+  isPickingStudent_ = false;
   document.body.classList.remove('picker-open');
   const bd = $('studentsBackdrop');
   if (bd) bd.classList.add('hidden');
@@ -433,6 +464,7 @@ function renderOrientacion_(student) {
       await loadStudents();
       const data = await apiCall('getStudentStatus', { ciclo_lectivo: state.ciclo, id_estudiante: student.id_estudiante });
       renderStudent(data.data);
+    hideAppLoader_();
     } catch (err) {
       toast('No pude guardar la orientación: ' + (err?.message || err));
     } finally {
@@ -991,6 +1023,18 @@ function wireTabs() {
 }
 
 function wireEvents() {
+  // Micro-animación al tocar cualquier botón (mobile friendly)
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('button');
+    if (!btn) return;
+    btn.classList.remove('tap');
+    // reflow
+    void btn.offsetWidth;
+    btn.classList.add('tap');
+    setTimeout(() => btn.classList.remove('tap'), 220);
+    pulseTopLoader_();
+  }, true);
+
   $('btnSaveKey').onclick = async () => {
     const key = $('apiKeyInput').value.trim();
     if (!key) return setMessage('gateMsg', 'Pegá la API Key.', 'err');
@@ -999,13 +1043,17 @@ function wireEvents() {
     state.apiKey = key;
 
     try {
+      showAppLoader_('Conectando…');
       await apiCall('ping', {});
       setMessage('gateMsg', '', '');
       setGateVisible(false);
+      showAppLoader_('Cargando ciclos y materias…');
       await loadCycles();
       await loadCatalog();
+      showAppLoader_('Cargando estudiantes…');
       await loadStudents();
     } catch (err) {
+      hideAppLoader_();
       setMessage('gateMsg', 'Clave inválida o backend mal configurado: ' + err.message, 'err');
     }
   };
@@ -1015,7 +1063,8 @@ function wireEvents() {
     state.apiKey = null;
     $('apiKeyInput').value = '';
     setMessage('gateMsg', '', '');
-    setGateVisible(true);
+    hideAppLoader_();
+      setGateVisible(true);
   };
 
   $('btnDivisionSummary').onclick = async () => {
@@ -1230,7 +1279,7 @@ $('cicloSelect').onchange = async () => {
     } else {
       // on mobile: don't open the picker if we're still on the API key gate
       if (!$('app').classList.contains('hidden')) {
-        setMobilePanel_(state.selectedStudentId ? 'detail' : 'students');
+        if (!isPickingStudent_) setMobilePanel_(state.selectedStudentId ? 'detail' : 'students');
       }
     }
   }, { passive: true });
@@ -1253,11 +1302,15 @@ async function init() {
   if (saved) {
     state.apiKey = saved;
     try {
+      showAppLoader_('Conectando…');
       await apiCall('ping', {});
       setGateVisible(false);
+      showAppLoader_('Cargando ciclos y materias…');
       await loadCycles();
       await loadCatalog();
+      showAppLoader_('Cargando estudiantes…');
       await loadStudents();
+      hideAppLoader_();
     } catch {
       // clave vieja o backend mal
       setGateVisible(true);
