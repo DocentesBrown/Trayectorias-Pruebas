@@ -195,7 +195,11 @@ function renderStudents(list) {
     `;
 
     // Click en tarjeta = seleccionar estudiante
-    div.onclick = () => selectStudent(s.id_estudiante);
+    // En mobile, ignoramos el "mismo tap" que abrió el picker (si no, se vuelve a seleccionar el activo y se cierra solo).
+    div.onclick = (ev) => {
+      if (isMobile_() && (Date.now() - pickerOpenedAt_ < 350)) return;
+      selectStudent(s.id_estudiante);
+    };
 
     // Botón cierre = abrir modal (sin disparar select doble)
     const btn = div.querySelector('button[data-action="cierre"]');
