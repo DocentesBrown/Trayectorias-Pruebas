@@ -130,9 +130,18 @@ body{
   color: #fff;
   border-color: rgba(36,73,110,0.35);
 }
+.btn.danger{
+  background: var(--red);
+  color: #fff;
+  border-color: rgba(218,104,99,0.55);
+}
+.btn.danger:hover{ filter: brightness(0.98); }
+
 .btn.ghost{
   background: transparent;
 }
+.btn.ghost.danger{ background: var(--red); color:#fff; border-color: rgba(218,104,99,0.55); }
+
 
 .list{margin-top:12px; display:flex; flex-direction:column; gap:8px; max-height:70vh; overflow:auto; padding-right:6px}
 .item{

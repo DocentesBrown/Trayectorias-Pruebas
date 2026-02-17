@@ -938,9 +938,20 @@ async function selectStudent(id) {
   setMessage('saveMsg', '', '');
   $('btnSave').disabled = true;
 
-  const ciclo = state.ciclo;
-  const data = await apiCall('getStudentStatus', { ciclo_lectivo: ciclo, id_estudiante: id });
-  renderStudent(data.data);
+  // UX: show loader while fetching student info (especially on mobile)
+  if (state._selectingStudent) return;
+  state._selectingStudent = true;
+  pulseTopLoader_();
+  if (isMobile_()) showAppLoader_('Cargando estudiante…');
+
+  try {
+    const ciclo = state.ciclo;
+    const data = await apiCall('getStudentStatus', { ciclo_lectivo: ciclo, id_estudiante: id });
+    renderStudent(data.data);
+  } finally {
+    if (isMobile_()) hideAppLoader_();
+    state._selectingStudent = false;
+  }
 
   // Mobile UX: after selecting, jump to detail panel
   if (isMobile_()) {
@@ -1104,6 +1115,11 @@ $('btnRefresh').onclick = async () => {
 
 $('btnRollover').onclick = async () => {
   if (!state.apiKey && !localStorage.getItem(LS_KEY)) return;
+
+  const okWarn = confirm(
+    "⚠️ IMPORTANTE\n\nSi NO cerraste la nota de TODOS los estudiantes del ciclo actual, NO continúes con 'Crear ciclo nuevo'.\n\n¿Confirmás que ya cerraste todo y querés continuar?"
+  );
+  if (!okWarn) return;
 
   const origen = (prompt('Año origen (ej. 2026):', state.ciclo) || '').trim();
   if (!origen) return;
