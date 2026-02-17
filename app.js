@@ -114,6 +114,13 @@ function setMobilePanel_(which){
 function setGateVisible(visible) {
   $('gate').classList.toggle('hidden', !visible);
   $('app').classList.toggle('hidden', visible);
+
+  // Mobile: show/hide bottom bar only when inside the app
+  const bb = $('mobileBottomBar');
+  if (bb) {
+    const show = (!visible) && isMobile_();
+    bb.classList.toggle('hidden', !show);
+  }
 }
 
 function renderStudents(list) {
@@ -161,6 +168,12 @@ function renderStudents(list) {
         <div>
           <div class="title">${escapeHtml(`${s.apellido}, ${s.nombre}`)}</div>
           <div class="sub">${escapeHtml(`${s.division || ''} · ${s.turno || ''} · Año: ${s.anio_actual || '—'} · ID: ${s.id_estudiante}`)}</div>
+          <div class="chips">
+            ${done ? `<span class="chip ok">Cierre ✅</span>` : ``}
+            ${Number(s.cierre_pendiente||0) > 0 ? `<span class="chip warn">Faltan ${Number(s.cierre_pendiente||0)}</span>` : (!done ? `<span class="chip info">Al día</span>` : ``)}
+            ${risk ? `<span class="chip warn">Riesgo</span>` : ``}
+            ${needs ? `<span class="chip warn">Revisar</span>` : ``}
+          </div>
         </div>
         <div class="item-actions">
           <button class="btn tiny ghost" data-action="cierre">Cierre</button>
@@ -430,8 +443,21 @@ function renderStudent(data) {
   renderPills('listIntensifica', b.intensifica);
   renderPills('listAtraso', b.atraso);
 
+  // Accordion counters (Panel)
+  const setCount = (id, n) => { const el = $(id); if (el) el.textContent = `(${n})`; };
+  setCount('accAprobadasCount', b.aprobadas.length);
+  setCount('accAdeudadasCount', b.adeudadas.length);
+  setCount('accPrimeraCount', b.primera.length);
+  setCount('accRecursaCount', b.recursa.length);
+  setCount('accIntensificaCount', b.intensifica.length);
+  setCount('accAtrasoCount', b.atraso.length);
+
   renderEditorTable(materias);
   renderFamilyText(materias, data);
+
+  // Mobile: default to Panel and keep bottom bar in sync
+  if (isMobile_()) setTab_('panel');
+  updateBottomBarState_();
 }
 
 function renderFamilyText(materias, data) {
@@ -532,6 +558,7 @@ function setMateriaField(id_materia, field, value) {
   }
 
   $('btnSave').disabled = state.dirtyByMateria.size === 0;
+  updateBottomBarState_();
   const btnC = $('btnSaveCierre');
   if (btnC) btnC.disabled = state.dirtyByMateria.size === 0;
 
@@ -592,6 +619,37 @@ function setModalVisible(modalId, visible) {
 }
 
 // ======== Cierre por estudiante (modal) ========
+
+function createCierreToggle_(id_materia, current){
+  const wrap = document.createElement('div');
+  wrap.className = 'cierre-toggle';
+
+  const mkBtn = (val, label) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cierre-btn' + ((current||'') === val ? ' active' : '');
+    b.textContent = label;
+    b.onclick = () => {
+      // update local state + dirty tracking
+      setMateriaField(id_materia, 'resultado_cierre', val);
+      // update visuals
+      [...wrap.querySelectorAll('button')].forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+
+      const { faltan } = cierreProgress_();
+      if (faltan === 0) setMessage('cierreMsg', 'Listo: ya marcaste todas ✅ (guardá para aplicar)', 'ok');
+      else setMessage('cierreMsg', `Te faltan ${faltan} materias por marcar.`, '');
+      updateBottomBarState_();
+    };
+    return b;
+  };
+
+  wrap.appendChild(mkBtn('aprobada', 'Aprobó'));
+  wrap.appendChild(mkBtn('no_aprobada', 'No aprobó'));
+
+  return wrap;
+}
+
 async function openCierreModalForStudent(idEstudiante) {
   // Selecciona estudiante (carga datos) y abre modal
   await selectStudent(idEstudiante);
@@ -631,32 +689,14 @@ function renderCierreModal() {
   target.forEach(m => {
     const tr = document.createElement('tr');
 
-    const sel = document.createElement('select');
-    sel.className = 'select';
-
-    CIERRE_RESULTADOS.forEach(o => {
-      const opt = document.createElement('option');
-      opt.value = o.value;
-      opt.textContent = o.label;
-      if ((m.resultado_cierre || '') === o.value) opt.selected = true;
-      sel.appendChild(opt);
-    });
-
-    sel.onchange = () => {
-      setMateriaField(m.id_materia, 'resultado_cierre', sel.value);
-      // Feedback en el modal: si ya no faltan, avisar
-      const { faltan } = cierreProgress_();
-      if (faltan === 0) setMessage('cierreMsg', 'Listo: ya marcaste todas ✅ (guardá para aplicar)', 'ok');
-      else setMessage('cierreMsg', `Te faltan ${faltan} materias por marcar.`, '');
-    };
-
     tr.innerHTML = `
       <td data-label="Materia">${escapeHtml(m.nombre || m.id_materia)} <div class="muted">${escapeHtml(m.id_materia)}</div></td>
       <td data-label="Año">${escapeHtml(m.anio || '')}</td>
       <td data-label="Situación">${escapeHtml(cierreLabel(m.situacion_actual))}</td>
       <td data-label="Resultado"></td>
     `;
-    tr.children[3].appendChild(sel);
+
+    tr.children[3].appendChild(createCierreToggle_(m.id_materia, (m.resultado_cierre || '').trim()));
     tbody.appendChild(tr);
   });
 
@@ -864,6 +904,36 @@ async function saveChanges() {
 }
 
 
+
+function setTab_(name){
+  const tabs = document.querySelectorAll('.tab');
+  tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  ['panel','editor','familia'].forEach(n => {
+    const el = $(`tab-${n}`);
+    if (el) el.classList.toggle('hidden', n !== name);
+  });
+}
+
+function syncMobileCicloSelect_(){
+  const a = $('cicloSelect');
+  const b = $('cicloSelectMobile');
+  if (!a || !b) return;
+  b.value = a.value;
+}
+
+function updateBottomBarState_(){
+  const save = $('btnBottomSave');
+  const cierre = $('btnBottomCierre');
+  const back = $('btnBottomBack');
+  if (save) save.disabled = (state.dirtyByMateria.size === 0);
+  if (cierre) cierre.disabled = !state.selectedStudentId;
+  if (back) back.disabled = false;
+}
+
+function setMoreModalVisible_(visible){
+  setModalVisible('modalMore', visible);
+  if (visible) syncMobileCicloSelect_();
+}
 function wireTabs() {
   const tabs = document.querySelectorAll('.tab');
   tabs.forEach(t => {
@@ -1038,8 +1108,48 @@ $('cicloSelect').onchange = async () => {
   if ($('btnShowDetail')) $('btnShowDetail').onclick = () => setMobilePanel_('detail');
   if ($('btnBackStudents')) $('btnBackStudents').onclick = () => setMobilePanel_('students');
 
+
+  // Mobile: top menu + bottom bar + quick actions
+  if ($('btnTopMenu')) $('btnTopMenu').onclick = () => setMoreModalVisible_(true);
+  if ($('btnBottomMore')) $('btnBottomMore').onclick = () => setMoreModalVisible_(true);
+  if ($('btnCloseMore')) $('btnCloseMore').onclick = () => setMoreModalVisible_(false);
+  if ($('modalMoreBackdrop')) $('modalMoreBackdrop').onclick = () => setMoreModalVisible_(false);
+
+  if ($('btnBottomBack')) $('btnBottomBack').onclick = () => setMobilePanel_('students');
+  if ($('btnBottomSave')) $('btnBottomSave').onclick = saveChanges;
+  if ($('btnBottomCierre')) $('btnBottomCierre').onclick = async () => {
+    if (!state.selectedStudentId) return toast('Elegí un/a estudiante primero.');
+    await openCierreModalForStudent(state.selectedStudentId);
+  };
+
+  // Quick Panel buttons
+  if ($('btnQuickEditor')) $('btnQuickEditor').onclick = () => setTab_('editor');
+  if ($('btnQuickFamilia')) $('btnQuickFamilia').onclick = () => setTab_('familia');
+
+  // More modal shortcuts
+  if ($('btnMorePanel')) $('btnMorePanel').onclick = () => { setTab_('panel'); setMoreModalVisible_(false); };
+  if ($('btnMoreEditor')) $('btnMoreEditor').onclick = () => { setTab_('editor'); setMoreModalVisible_(false); };
+  if ($('btnMoreFamilia')) $('btnMoreFamilia').onclick = () => { setTab_('familia'); setMoreModalVisible_(false); };
+
+  // More modal tools (proxy existing buttons)
+  if ($('btnMoreRollover')) $('btnMoreRollover').onclick = () => { $('btnRollover').click(); setMoreModalVisible_(false); };
+  if ($('btnMoreSummary')) $('btnMoreSummary').onclick = () => { $('btnDivisionSummary').click(); setMoreModalVisible_(false); };
+  if ($('btnMoreRefresh')) $('btnMoreRefresh').onclick = () => { $('btnRefresh').click(); setMoreModalVisible_(false); };
+  if ($('btnMoreLogout')) $('btnMoreLogout').onclick = () => { $('btnLogout').click(); setMoreModalVisible_(false); };
+
+  // Mobile ciclo select sync
+  if ($('cicloSelectMobile')) $('cicloSelectMobile').onchange = () => {
+    $('cicloSelect').value = $('cicloSelectMobile').value;
+    $('cicloSelect').dispatchEvent(new Event('change'));
+    setMoreModalVisible_(false);
+  };
+
   // When resizing, keep a sensible panel visible
   window.addEventListener('resize', () => {
+    const bb = $('mobileBottomBar');
+    if (bb) bb.classList.toggle('hidden', !isMobile_() || $('app').classList.contains('hidden'));
+    updateBottomBarState_();
+
     if (!isMobile_()){
       // on desktop show both
       const students = $('studentsPanel');
@@ -1062,6 +1172,7 @@ async function init() {
 
   // Mobile: start on students panel
   if (isMobile_()) setMobilePanel_('students');
+  updateBottomBarState_();
 
   state.ciclo = $('cicloSelect').value;
 
