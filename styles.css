@@ -115,6 +115,8 @@ body{
 .item .sub{font-size:12px; color:var(--muted); margin-top:2px}
 
 .aside-head{display:flex; flex-direction:column; gap:10px}
+.aside-head-top{display:flex; align-items:center; justify-content:space-between; gap:10px}
+.aside-head-top h2{margin:0}
 
 .student-head{
   display:flex;
@@ -245,6 +247,17 @@ body{
   background: rgba(15,23,42,0.45);
   backdrop-filter: blur(4px);
 }
+
+/* Mobile student picker backdrop */
+.students-backdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,0.45);
+  backdrop-filter: blur(4px);
+  z-index: 45;
+  display:none;
+}
+
 .modal-card{
   position:relative;
   width: min(920px, 100%);
@@ -419,7 +432,7 @@ body{
 .mobile-only{ display:none !important; }
 
 @media (max-width: 980px){
-  .mobile-nav{ display:flex; }
+  .mobile-nav{ display:none; }
   .mobile-only{ display:inline-flex !important; }
   .student-head{ flex-wrap: wrap; }
   .student-head > .mobile-only{ order: -1; }
@@ -633,4 +646,36 @@ body{
 }
 @media (max-width: 980px){
   .cierre-btn{ flex: 1 1 0; }
+}
+
+
+
+/* ===== Mobile: student search as a modal (only on small screens) ===== */
+@media (max-width: 980px){
+  /* Hide the left panel in the layout; it opens as a modal */
+  #studentsPanel{ display:none; }
+
+  body.picker-open{ overflow:hidden; }
+  body.picker-open .students-backdrop{ display:block; }
+
+  body.picker-open #studentsPanel{
+    display:block;
+    position: fixed;
+    inset: 74px 12px 86px 12px; /* below topbar, above bottom bar */
+    z-index: 46;
+    padding: 14px;
+  }
+
+  body.picker-open #studentsPanel .list{
+    max-height: calc(100vh - 260px);
+  }
+
+  /* Keep the search + filters always visible while scrolling */
+  body.picker-open #studentsPanel .aside-head{
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--card);
+    padding-bottom: 10px;
+  }
 }

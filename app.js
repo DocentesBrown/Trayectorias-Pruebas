@@ -93,22 +93,29 @@ async function apiCall(action, payload) {
 function isMobile_(){
   return window.matchMedia && window.matchMedia('(max-width: 980px)').matches;
 }
-function setMobilePanel_(which){
+function openStudentPicker_(){
+  document.body.classList.add('picker-open');
+  const bd = $('studentsBackdrop');
+  if (bd) bd.classList.remove('hidden');
   const students = $('studentsPanel');
-  const detail = $('detailPanel');
-  const nav = $('mobileNav');
-  if (!students || !detail || !nav) return;
+  if (students) students.classList.remove('hidden-mobile');
+  setTimeout(() => {
+    const inp = $('studentSearch');
+    if (inp) inp.focus();
+  }, 60);
+}
+function closeStudentPicker_(){
+  document.body.classList.remove('picker-open');
+  const bd = $('studentsBackdrop');
+  if (bd) bd.classList.add('hidden');
+}
 
-  const showStudents = which === 'students';
-  students.classList.toggle('hidden-mobile', !showStudents);
-  detail.classList.toggle('hidden-mobile', showStudents);
+function setMobilePanel_(which){
+  // Desktop keeps the classic layout (students on the left + detail on the right)
+  if (!isMobile_()) return;
 
-  const bS = $('btnShowStudents');
-  const bD = $('btnShowDetail');
-  if (bS && bD){
-    bS.classList.toggle('active', showStudents);
-    bD.classList.toggle('active', !showStudents);
-  }
+  if (which === 'students') openStudentPicker_();
+  else closeStudentPicker_();
 }
 
 function setGateVisible(visible) {
@@ -855,6 +862,11 @@ async function loadStudents() {
   state.students = data.students || [];
   rebuildCourseOptions(state.students);
   renderStudents(state.students);
+
+  // Mobile UX: open picker automatically the first time
+  if (isMobile_() && !state.selectedStudentId && state.students.length) {
+    openStudentPicker_();
+  }
 }
 
 async function selectStudent(id) {
@@ -1103,11 +1115,15 @@ $('cicloSelect').onchange = async () => {
       setMessage('copyMsg', 'No pude copiar automáticamente. Seleccioná y copiá manual.', 'err');
     }
   };
-  // Mobile panel navigation
-  if ($('btnShowStudents')) $('btnShowStudents').onclick = () => setMobilePanel_('students');
-  if ($('btnShowDetail')) $('btnShowDetail').onclick = () => setMobilePanel_('detail');
-  if ($('btnBackStudents')) $('btnBackStudents').onclick = () => setMobilePanel_('students');
-
+  // Mobile: student search opens as a modal (PC stays the same)
+  if ($('btnShowStudents')) $('btnShowStudents').onclick = () => openStudentPicker_();
+  if ($('btnShowDetail')) $('btnShowDetail').onclick = () => closeStudentPicker_();
+  if ($('btnBackStudents')) $('btnBackStudents').onclick = () => openStudentPicker_();
+  if ($('btnCloseStudents')) $('btnCloseStudents').onclick = () => closeStudentPicker_();
+  if ($('studentsBackdrop')) $('studentsBackdrop').onclick = () => closeStudentPicker_();
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeStudentPicker_();
+  });
 
   // Mobile: top menu + bottom bar + quick actions
   if ($('btnTopMenu')) $('btnTopMenu').onclick = () => setMoreModalVisible_(true);
@@ -1115,7 +1131,7 @@ $('cicloSelect').onchange = async () => {
   if ($('btnCloseMore')) $('btnCloseMore').onclick = () => setMoreModalVisible_(false);
   if ($('modalMoreBackdrop')) $('modalMoreBackdrop').onclick = () => setMoreModalVisible_(false);
 
-  if ($('btnBottomBack')) $('btnBottomBack').onclick = () => setMobilePanel_('students');
+  if ($('btnBottomBack')) $('btnBottomBack').onclick = () => openStudentPicker_();
   if ($('btnBottomSave')) $('btnBottomSave').onclick = saveChanges;
   if ($('btnBottomCierre')) $('btnBottomCierre').onclick = async () => {
     if (!state.selectedStudentId) return toast('Elegí un/a estudiante primero.');
@@ -1137,6 +1153,9 @@ $('cicloSelect').onchange = async () => {
   if ($('btnMoreRefresh')) $('btnMoreRefresh').onclick = () => { $('btnRefresh').click(); setMoreModalVisible_(false); };
   if ($('btnMoreLogout')) $('btnMoreLogout').onclick = () => { $('btnLogout').click(); setMoreModalVisible_(false); };
 
+  // Close picker if switching to desktop layout
+  window.addEventListener('resize', () => { if (!isMobile_()) closeStudentPicker_(); });
+
   // Mobile ciclo select sync
   if ($('cicloSelectMobile')) $('cicloSelectMobile').onchange = () => {
     $('cicloSelect').value = $('cicloSelectMobile').value;
@@ -1157,8 +1176,10 @@ $('cicloSelect').onchange = async () => {
       if (students) students.classList.remove('hidden-mobile');
       if (detail) detail.classList.remove('hidden-mobile');
     } else {
-      // on mobile: if no student selected, show students; else keep detail
-      setMobilePanel_(state.selectedStudentId ? 'detail' : 'students');
+      // on mobile: don't open the picker if we're still on the API key gate
+      if (!$('app').classList.contains('hidden')) {
+        setMobilePanel_(state.selectedStudentId ? 'detail' : 'students');
+      }
     }
   }, { passive: true });
 
@@ -1170,8 +1191,8 @@ async function init() {
 
   // ciclo default
 
-  // Mobile: start on students panel
-  if (isMobile_()) setMobilePanel_('students');
+  // Mobile: picker opens after loading students (avoid opening over the API key gate)
+  if (isMobile_() && !$('app').classList.contains('hidden')) setMobilePanel_('students');
   updateBottomBarState_();
 
   state.ciclo = $('cicloSelect').value;

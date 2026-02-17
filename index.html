@@ -54,7 +54,10 @@
       <!-- Left: students -->
       <aside id="studentsPanel" class="card">
         <div class="aside-head">
-          <h2>Estudiantes</h2>
+          <div class="aside-head-top">
+            <h2>Estudiantes</h2>
+            <button id="btnCloseStudents" class="btn ghost mobile-only" type="button">Cerrar</button>
+          </div>
           <input id="studentSearch" class="input" placeholder="Buscar por nombre, división o ID…" />
           <div class="filters">
             <select id="courseFilter" class="select">
@@ -70,7 +73,7 @@
       <!-- Right: student details -->
       <section id="detailPanel" class="card">
         <div class="student-head">
-          <button id="btnBackStudents" class="btn ghost mobile-only" type="button">← Estudiantes</button>
+          <button id="btnBackStudents" class="btn ghost mobile-only" type="button">Buscar estudiante</button>
           <div>
             <h2 id="studentName">Seleccioná un/a estudiante</h2>
             <div id="studentMeta" class="muted"></div>
@@ -196,9 +199,11 @@
     </section>
   </main>
 
+  <div id="studentsBackdrop" class="students-backdrop hidden" aria-hidden="true"></div>
+
   <!-- Bottom bar (mobile) -->
   <div id="mobileBottomBar" class="bottom-bar hidden" aria-label="Acciones rápidas">
-    <button id="btnBottomBack" class="bb-btn" type="button">← Lista</button>
+    <button id="btnBottomBack" class="bb-btn" type="button">Buscar</button>
     <button id="btnBottomCierre" class="bb-btn" type="button">Cierre</button>
     <button id="btnBottomSave" class="bb-btn primary" type="button" disabled>Guardar</button>
     <button id="btnBottomMore" class="bb-btn" type="button">Más</button>
