@@ -220,6 +220,30 @@ function ensureEstadoColumns_(names) {
   (names || []).forEach(n => ensureEstadoColumn_(n));
 }
 
+
+// Asegura que exista una columna en Estudiantes. Si no existe, la crea al final.
+function ensureEstudiantesColumn_(colName) {
+  const sh = sheet_(SHEETS.ESTUDIANTES);
+  const headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
+  const idx = headers.indexOf(colName);
+  if (idx !== -1) return idx; // 0-based
+  const newCol = headers.length + 1;
+  sh.getRange(1, newCol).setValue(colName);
+
+  // Inicializar valores en filas existentes (para evitar undefined)
+  const lastRow = sh.getLastRow();
+  if (lastRow > 1) {
+    // Por defecto: egresado FALSE / anio_egreso vacío
+    const v = (String(colName) === 'egresado') ? false : '';
+    sh.getRange(2, newCol, lastRow - 1, 1).setValues(Array(lastRow - 1).fill([v]));
+  }
+  return newCol - 1;
+}
+
+function ensureEstudiantesColumns_(names) {
+  (names || []).forEach(n => ensureEstudiantesColumn_(n));
+}
+
 // Helpers para promo de división (ej: 4°A -> 5°A)
 function promoDivision_(division) {
   const s = String(division || '').trim();
@@ -245,8 +269,8 @@ function promoDivision_(division) {
 
 function getCycles_() {
   const sh = sheet_(SHEETS.ESTADO);
-  const { headers, rows } = getValues_(sh);
-  const idx = headerMap_(headers);
+  let { headers, rows } = getValues_(sh);
+  let idx = headerMap_(headers);
   const set = {};
   rows.forEach(r => {
     const c = String(r[idx['ciclo_lectivo']] || '').trim();
@@ -299,6 +323,47 @@ function rolloverCycle_(payload) {
   const regularMap = {};  // key sid|mid -> true (alguna vez cursó regular)
   const existsDest = {};  // key sid|mid -> true
 
+  // Helpers para egreso: adeudadas en origen (sin contar años futuros)
+  const catalogYearByMid0 = {};
+  catalog.forEach(m => {
+    const mid = String(m.id_materia || '').trim();
+    const y = Number(m.anio || '');
+    if (mid && !isNaN(y) && y > 0) catalogYearByMid0[mid] = y;
+  });
+
+  const oldYearByStudent0 = {};
+  students.forEach(s => {
+    const y = Number(s.anio_actual || '');
+    oldYearByStudent0[s.id_estudiante] = (!isNaN(y) && y > 0) ? Math.min(y, 6) : null;
+  });
+
+  const owedInOrigen0 = {}; // sid -> { mid:true }
+  if (origenExiste) {
+    rows.forEach(r => {
+      const c = String(r[idx['ciclo_lectivo']] || '').trim();
+      if (c !== origen) return;
+
+      const sid = String(r[idx['id_estudiante']] || '').trim();
+      if (!sid) return;
+
+      const cond = String(r[idx['condicion_academica']] || '').trim().toLowerCase();
+      if (cond !== 'adeuda') return;
+
+      const mid = String(r[idx['id_materia']] || '').trim();
+      if (!mid) return;
+
+      const oy = oldYearByStudent0[sid];
+      const my = catalogYearByMid0[mid];
+
+      // Si tenemos año de materia y del/la estudiante, no consideramos futuros como "adeuda"
+      if (oy && my && my > oy) return;
+
+      if (!owedInOrigen0[sid]) owedInOrigen0[sid] = {};
+      owedInOrigen0[sid][mid] = true;
+    });
+  }
+
+
   rows.forEach(r => {
     const ciclo = String(r[idx['ciclo_lectivo']] || '').trim();
     const sid = String(r[idx['id_estudiante']] || '').trim();
@@ -341,7 +406,15 @@ function rolloverCycle_(payload) {
     const sDest = Object.assign({}, s, { anio_actual: targetGrade });
 
     // Catálogo filtrado por orientación (si aplica)
-    const allowedCatalog = filterCatalogForStudent_(catalog, sDest);
+    const allowedCatalogBase = filterCatalogForStudent_(catalog, sDest);
+
+    // Si egresó (venía de 6º en el ciclo origen), en el ciclo destino solo seguimos las materias ADEUDADAS
+    // para que pueda cerrar pendientes sin “cargar” materias nuevas.
+    let allowedCatalog = allowedCatalogBase;
+    if (updateStudents && oldYear === 6 && origenExiste) {
+      const owedSet = owedInOrigen0[sid] || null;
+      allowedCatalog = owedSet ? allowedCatalogBase.filter(m => !!owedSet[String(m.id_materia || '').trim()]) : [];
+    }
 
     allowedCatalog.forEach(m => {
       const mid = m.id_materia;
@@ -383,7 +456,7 @@ function rolloverCycle_(payload) {
   // --- 2) Promoción de estudiantes (anio_actual +1) ---
   let promoInfo = null;
   if (updateStudents) {
-    promoInfo = updateStudentsOnRollover_(usuario);
+    promoInfo = updateStudentsOnRollover_(usuario, destino);
   }
 
   // --- 3) Ajuste automático del plan anual en el ciclo destino (12 regular + 4 intensifica) ---
@@ -630,7 +703,9 @@ function getCatalog_() {
       nombre: String(r[idx['nombre']] || '').trim(),
       anio: parseYear_(r[idx['anio']]),
       es_troncal: toBool_(r[idx['es_troncal']]),
-      orientacion: (idx['orientacion'] !== undefined) ? String(r[idx['orientacion']] || '').trim() : ''
+      orientacion: (idx['orientacion'] !== undefined) ? String(r[idx['orientacion']] || '').trim() : '',
+      egresado: (idx['egresado'] !== undefined) ? toBool_(r[idx['egresado']]) : false,
+      anio_egreso: (idx['anio_egreso'] !== undefined) ? String(r[idx['anio_egreso']] || '').trim() : ''
     }))
     .filter(m => m.id_materia);
 }
@@ -694,8 +769,8 @@ function getStudentList_(payload) {
     if (!mid) return;
 
     const st = byStudent[sid];
+    const cat = catalogMap[mid];
     if (st) {
-      const cat = catalogMap[mid];
       if (cat && !catalogAplicaAStudent_(cat, st.anio_actual, st.orientacion)) return;
     }
 
@@ -706,7 +781,15 @@ function getStudentList_(payload) {
     // Conteo de adeudadas para filtro "en riesgo" (impacta aunque aún no se haya ejecutado cierre global)
     const resLc = String(res || '').trim().toLowerCase();
     const isAdeuda = (cond === 'adeuda') || (resLc === 'no_aprobada' || resLc === 'no aprobada' || resLc === 'no_aprobo' || resLc === 'no' );
-    if (isAdeuda && sit !== 'proximos_anos') adeudaCount[sid] = (adeudaCount[sid] || 0) + 1;
+    if (isAdeuda) {
+      // No contar adeudadas de años posteriores que aún no corresponde cursar
+      const matYear = cat ? Number(cat.anio || '') : NaN;
+      const stYear = st ? Number(st.anio_actual || '') : NaN;
+      const futureByYear = (!isNaN(matYear) && !isNaN(stYear) && matYear > stYear);
+      if (sit !== 'proximos_anos' && !futureByYear) {
+        adeudaCount[sid] = (adeudaCount[sid] || 0) + 1;
+      }
+    }
 
     // Materias a cerrar: las que cursó/recursó/intensificó en este ciclo
     if (sit === 'cursa_primera_vez' || sit === 'recursa' || sit === 'intensifica') {
@@ -739,10 +822,16 @@ function getStudentList_(payload) {
 
 // Actualiza anio_actual (+1) y, si se puede, la división en Estudiantes.
 // Se usa opcionalmente en rollover.
-function updateStudentsOnRollover_(usuario) {
+function updateStudentsOnRollover_(usuario, cicloDestino) {
   const sh = sheet_(SHEETS.ESTUDIANTES);
-  const { headers, rows } = getValues_(sh);
-  const idx = headerMap_(headers);
+  let { headers, rows } = getValues_(sh);
+  let idx = headerMap_(headers);
+  // Compatibilidad: columnas nuevas para egreso
+  ensureEstudiantesColumns_(['egresado','anio_egreso']);
+  // Releer porque puede haber cambiado la estructura
+  ({ headers, rows } = getValues_(sh));
+  idx = headerMap_(headers);
+
 
   if (idx['anio_actual'] === undefined) throw new Error('En Estudiantes falta la columna anio_actual');
   if (idx['id_estudiante'] === undefined) throw new Error('En Estudiantes falta la columna id_estudiante');
@@ -762,10 +851,31 @@ function updateStudentsOnRollover_(usuario) {
     const anio = Number(row[idx['anio_actual']] || '');
     if (isNaN(anio) || anio <= 0) { skipped++; continue; }
 
-    // No promovemos más allá de 6 por defecto
-    const nuevoAnio = Math.min(anio + 1, 6);
-    if (nuevoAnio === anio) { skipped++; continue; }
+    // Si ya está en 6º: pasa a EGRESADO en el ciclo nuevo (sin perder trayectoria)
+    if (anio >= 6) {
+      if (idx['egresado'] !== undefined) {
+        const ya = toBool_(row[idx['egresado']]);
+        if (!ya) {
+          row[idx['egresado']] = true;
+        }
+      }
+      if (idx['anio_egreso'] !== undefined) {
+        const prevEg = String(row[idx['anio_egreso']] || '').trim();
+        if (!prevEg && cicloDestino) row[idx['anio_egreso']] = cicloDestino;
+      }
 
+      if (idx['observaciones'] !== undefined && usuario) {
+        const prev = String(row[idx['observaciones']] || '');
+        const tag = `[egreso ${cicloDestino || isoNow_().slice(0,4)}]`;
+        row[idx['observaciones']] = prev ? `${prev} ${tag}` : tag;
+      }
+
+      updated++;
+      continue;
+    }
+
+    // No promovemos más allá de 6 por defecto (1º a 5º -> +1)
+    const nuevoAnio = Math.min(anio + 1, 6);
     row[idx['anio_actual']] = nuevoAnio;
 
     if (idx['division'] !== undefined) {
@@ -790,7 +900,7 @@ function updateStudentsOnRollover_(usuario) {
     sh.getRange(2, 1, rows.length, headers.length).setValues(rows);
   }
 
-  return { estudiantes_actualizados: updated, division_actualizada: divUpdated, omitidos: skipped };
+  return { estudiantes_actualizados: updated, division_actualizada: divUpdated, omitidos: skipped, ciclo_destino: cicloDestino || '' };
 }
 
 
@@ -1154,7 +1264,16 @@ function getDivisionRiskSummary_(payload) {
     if (!sid || !byId[sid]) return;
     hasAny[sid] = true;
     const cond = String(r[idx['condicion_academica']] || '').trim().toLowerCase();
-    if (cond === 'adeuda') adeudaCount[sid] = (adeudaCount[sid] || 0) + 1;
+    const sit = (idx['situacion_actual'] !== undefined) ? String(r[idx['situacion_actual']] || '').trim() : '';
+
+    // No contar años posteriores que aún no corresponde cursar
+    const matYear = cat ? Number(cat.anio || '') : NaN;
+    const stYear = st ? Number(st.anio_actual || '') : NaN;
+    const futureByYear = (!isNaN(matYear) && !isNaN(stYear) && matYear > stYear);
+
+    if (cond === 'adeuda' && sit !== 'proximos_anos' && !futureByYear) {
+      adeudaCount[sid] = (adeudaCount[sid] || 0) + 1;
+    }
   });
 
   // Group by division

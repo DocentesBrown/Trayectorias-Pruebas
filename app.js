@@ -231,11 +231,12 @@ function renderStudents(list) {
       <div class="item-head">
         <div>
           <div class="title">${escapeHtml(`${s.apellido}, ${s.nombre}`)}</div>
-          <div class="sub">${escapeHtml(`${s.division || ''} · ${s.turno || ''} · Año: ${s.anio_actual || '—'} · ID: ${s.id_estudiante}`)}</div>
+          <div class="sub">${escapeHtml(`${s.division || ''} · ${s.turno || ''} · Año: ${s.egresado ? 'EG' : (s.anio_actual || '—')} · ID: ${s.id_estudiante}`)}</div>
           <div class="chips">
             ${done ? `<span class="chip ok">Cierre ✅</span>` : ``}
             ${Number(s.cierre_pendiente||0) > 0 ? `<span class="chip warn">Faltan ${Number(s.cierre_pendiente||0)}</span>` : (!done ? `<span class="chip info">Al día</span>` : ``)}
             ${risk ? `<span class="chip warn">Riesgo</span>` : ``}
+            ${s.egresado ? `<span class="chip info">Egresado</span>` : ``}
             ${needs ? `<span class="chip warn">Revisar</span>` : ``}
           </div>
         </div>
@@ -269,10 +270,13 @@ function renderStudents(list) {
 
 
 function courseKey_(s){
-  return `${s.anio_actual || ''}|${s.division || ''}|${s.turno || ''}`;
+  const isEgresado = !!s.egresado;
+  const y = isEgresado ? 'EG' : (s.anio_actual || '');
+  return `${y}|${s.division || ''}|${s.turno || ''}`;
 }
 function courseLabel_(s){
-  const a = (s.anio_actual !== undefined && s.anio_actual !== null && s.anio_actual !== '') ? `${s.anio_actual}º` : '';
+  const isEgresado = !!s.egresado;
+  const a = isEgresado ? 'EG' : ((s.anio_actual !== undefined && s.anio_actual !== null && s.anio_actual !== '') ? `${s.anio_actual}º` : '');
   const d = (s.division || '—');
   const t = (s.turno || '');
   return `${a} ${d}${t ? ' · ' + t : ''}`.trim();
@@ -294,8 +298,10 @@ function rebuildCourseOptions(list){
 
   const entries = Array.from(map.entries()).sort((a,b) => {
     // sort by year number then label
-    const ya = Number(String(a[0]).split('|')[0] || 0);
-    const yb = Number(String(b[0]).split('|')[0] || 0);
+    const rawA = String(a[0]).split('|')[0] || '';
+    const rawB = String(b[0]).split('|')[0] || '';
+    const ya = (rawA === 'EG') ? 99 : Number(rawA || 0);
+    const yb = (rawB === 'EG') ? 99 : Number(rawB || 0);
     if (ya !== yb) return ya - yb;
     return String(a[1]).localeCompare(String(b[1]));
   });
@@ -347,7 +353,7 @@ function setMessage(elId, text, kind) {
   el.className = 'msg' + (kind ? ' ' + kind : '');
 }
 
-function computeBuckets(materias) {
+function computeBuckets(materias, student) {
   const buckets = {
     aprobadas: [],
     adeudadas: [],
@@ -362,7 +368,14 @@ function computeBuckets(materias) {
     const sit = (m.situacion_actual || '').trim();
 
     if (cond === 'aprobada') buckets.aprobadas.push(m);
-    if (cond === 'adeuda') buckets.adeudadas.push(m);
+    if (cond === 'adeuda') {
+      // No contar como "adeuda" las materias de años posteriores que aún no corresponden cursar
+      const sitLc = String(sit || '').trim();
+      const stYear = student ? Number(student.anio_actual || '') : NaN;
+      const matYear = Number(m.anio || '');
+      const futureByYear = (!isNaN(stYear) && !isNaN(matYear) && matYear > stYear);
+      if (sitLc !== 'proximos_anos' && !futureByYear) buckets.adeudadas.push(m);
+    }
 
     if (sit === 'cursa_primera_vez') buckets.primera.push(m);
     if (sit === 'recursa') buckets.recursa.push(m);
@@ -502,7 +515,7 @@ function renderStudent(data) {
   const s = data.estudiante || {};
   $('studentName').textContent = s.apellido ? `${s.apellido}, ${s.nombre}` : (s.nombre || s.id_estudiante || 'Estudiante');
   const cerrado = (data.materias || []).some(x => !!x.ciclo_cerrado);
-  $('studentMeta').textContent = `${data.ciclo_lectivo} · ${s.division || ''} · ${s.turno || ''} · Año: ${s.anio_actual || '—'} · ID: ${s.id_estudiante || ''}` + (cerrado ? ' · ✅ Ciclo cerrado' : '');
+  $('studentMeta').textContent = `${data.ciclo_lectivo} · ${s.division || ''} · ${s.turno || ''} · ${s.egresado ? 'Egresado · ' : ''}Año: ${s.egresado ? 'EG' : (s.anio_actual || '—')} · ID: ${s.id_estudiante || ''}` + (cerrado ? ' · ✅ Ciclo cerrado' : '');
 
   renderOrientacion_(s);
 
@@ -514,7 +527,7 @@ function renderStudent(data) {
   });
 
   // stats & buckets
-  const b = computeBuckets(materias);
+  const b = computeBuckets(materias, s);
   const c = counts(materias);
 
   $('regularCount').textContent = String(c.regular);
@@ -552,7 +565,7 @@ function renderFamilyText(materias, data) {
   const s = data.estudiante || {};
   const { regular, intens } = counts(materias);
 
-  const b = computeBuckets(materias);
+  const b = computeBuckets(materias, s);
 
   const lines = [];
   lines.push(`Hola, compartimos el plan anual de trayectoria de ${s.apellido ? `${s.apellido}, ${s.nombre}` : (s.nombre || 'el/la estudiante')} (${data.ciclo_lectivo}).`);
