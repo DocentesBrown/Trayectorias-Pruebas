@@ -62,6 +62,20 @@ let state = {
 
 };
 
+
+const BOOT_LOADER_MIN_MS = 650;
+let bootLoaderStartedAt = Date.now();
+function startBootLoader_(text){
+  bootLoaderStartedAt = Date.now();
+  showAppLoader_(text || 'Cargando…');
+}
+function hideBootLoader_(){
+  const elapsed = Date.now() - bootLoaderStartedAt;
+  const wait = Math.max(0, BOOT_LOADER_MIN_MS - elapsed);
+  setTimeout(() => hideAppLoader_(), wait);
+}
+
+
 function backendUrl() {
   const u = window.TRAYECTORIAS_BACKEND_URL;
   if (!u || u.includes('PEGAR_WEB_APP_URL_AQUI')) {
@@ -1317,11 +1331,14 @@ $('cicloSelect').onchange = async () => {
 
 }
 
+
 async function init() {
+  // Show the branded loader immediately on first paint
+  startBootLoader_('Cargando…');
+  await ensurePaint_();
+
   wireTabs();
   wireEvents();
-
-  // ciclo default
 
   // Mobile: picker opens after loading students (avoid opening over the API key gate)
   if (isMobile_() && !$('app').classList.contains('hidden')) setMobilePanel_('students');
@@ -1336,19 +1353,25 @@ async function init() {
       showAppLoader_('Conectando…');
       await apiCall('ping', {});
       setGateVisible(false);
+
       showAppLoader_('Cargando ciclos y materias…');
       await loadCycles();
       await loadCatalog();
+
       showAppLoader_('Cargando estudiantes…');
       await loadStudents();
-      hideAppLoader_();
+
+      hideBootLoader_();
     } catch {
       // clave vieja o backend mal
       setGateVisible(true);
+      hideBootLoader_();
     }
   } else {
     setGateVisible(true);
+    hideBootLoader_();
   }
 }
 
 init();
+
