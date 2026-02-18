@@ -782,11 +782,17 @@ function getStudentList_(payload) {
     const resLc = String(res || '').trim().toLowerCase();
     const isAdeuda = (cond === 'adeuda') || (resLc === 'no_aprobada' || resLc === 'no aprobada' || resLc === 'no_aprobo' || resLc === 'no' );
     if (isAdeuda) {
-      // No contar adeudadas de años posteriores que aún no corresponde cursar
+      // Contar adeudadas SOLO de años anteriores (no año en curso ni futuros)
       const matYear = cat ? Number(cat.anio || '') : NaN;
       const stYear = st ? Number(st.anio_actual || '') : NaN;
-      const futureByYear = (!isNaN(matYear) && !isNaN(stYear) && matYear > stYear);
-      if (sit !== 'proximos_anos' && !futureByYear) {
+      const hasYears = (!isNaN(matYear) && !isNaN(stYear));
+
+      // Con años disponibles: solo anteriores. Sin años: aproximación segura por situación.
+      const countsAsAdeuda = hasYears
+        ? (matYear < stYear)
+        : (sit !== 'proximos_anos' && sit !== 'cursa_primera_vez');
+
+      if (countsAsAdeuda) {
         adeudaCount[sid] = (adeudaCount[sid] || 0) + 1;
       }
     }

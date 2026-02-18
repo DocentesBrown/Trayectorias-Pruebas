@@ -369,12 +369,18 @@ function computeBuckets(materias, student) {
 
     if (cond === 'aprobada') buckets.aprobadas.push(m);
     if (cond === 'adeuda') {
-      // No contar como "adeuda" las materias de años posteriores que aún no corresponden cursar
+      // Contar como "adeuda" SOLO las materias de años anteriores (no año en curso ni futuros)
       const sitLc = String(sit || '').trim();
       const stYear = student ? Number(student.anio_actual || '') : NaN;
       const matYear = Number(m.anio || '');
-      const futureByYear = (!isNaN(stYear) && !isNaN(matYear) && matYear > stYear);
-      if (sitLc !== 'proximos_anos' && !futureByYear) buckets.adeudadas.push(m);
+      const hasYears = (!isNaN(stYear) && !isNaN(matYear));
+
+      // Con años disponibles: solo anteriores. Sin años: aproximación segura por situación.
+      const countsAsAdeuda = hasYears
+        ? (matYear < stYear)
+        : (sitLc !== 'proximos_anos' && sitLc !== 'cursa_primera_vez');
+
+      if (countsAsAdeuda) buckets.adeudadas.push(m);
     }
 
     if (sit === 'cursa_primera_vez') buckets.primera.push(m);
