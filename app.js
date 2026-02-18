@@ -119,12 +119,6 @@ function pulseTopLoader_(){
   }, 550);
 }
 
-async function ensurePaint_(){
-  // Force the browser to paint (helps loaders appear before heavy renders / fetch)
-  await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
-}
-
-
 // Prevent "open then instantly close" on mobile when the same tap triggers the backdrop.
 let pickerOpenedAt_ = 0;
 let isPickingStudent_ = false;
@@ -938,38 +932,29 @@ async function loadStudents() {
 }
 
 async function selectStudent(id) {
-  // Prevent double taps
-  if (state._selectingStudent) return;
-  state._selectingStudent = true;
-
-  // Immediate feedback (mobile needs it)
-  pulseTopLoader_();
-  const mobile = isMobile_();
-  if (mobile) showAppLoader_('Cargando estudiante…');
-
-  // Force paint before doing heavier work / network
-  await ensurePaint_();
-
-  // If the picker is open, close it now (keyboard resize won't kick us back)
-  if (mobile && isPickingStudent_) closeStudentPicker_();
-
   state.selectedStudentId = id;
   renderStudents(state.students);
 
   setMessage('saveMsg', '', '');
   $('btnSave').disabled = true;
 
+  // UX: show loader while fetching student info (especially on mobile)
+  if (state._selectingStudent) return;
+  state._selectingStudent = true;
+  pulseTopLoader_();
+  if (isMobile_()) showAppLoader_('Cargando estudiante…');
+
   try {
     const ciclo = state.ciclo;
     const data = await apiCall('getStudentStatus', { ciclo_lectivo: ciclo, id_estudiante: id });
     renderStudent(data.data);
   } finally {
-    if (mobile) hideAppLoader_();
+    if (isMobile_()) hideAppLoader_();
     state._selectingStudent = false;
   }
 
   // Mobile UX: after selecting, jump to detail panel
-  if (mobile) {
+  if (isMobile_()) {
     setMobilePanel_('detail');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
