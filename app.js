@@ -210,6 +210,15 @@ function renderStudents(list) {
     filtered = filtered.filter(s => !!s.en_riesgo);
   }
 
+  // Orden visual: los estudiantes con cierre completo van al fondo (mantiene orden relativo del backend)
+  const decorated = filtered.map((s, i) => ({ s, i }));
+  decorated.sort((a, b) => {
+    const da = a.s && a.s.cierre_completo ? 1 : 0;
+    const db = b.s && b.s.cierre_completo ? 1 : 0;
+    return (da - db) || (a.i - b.i);
+  });
+  filtered = decorated.map(d => d.s);
+
   const el = $('studentsList');
   el.innerHTML = '';
 
@@ -1172,6 +1181,34 @@ $('btnRollover').onclick = async () => {
 
   const origen = (prompt('Año origen (ej. 2026):', state.ciclo) || '').trim();
   if (!origen) return;
+
+  // Chequeo obligatorio: NO permitir crear ciclo nuevo si hay estudiantes con materias sin cierre en el ciclo origen
+  try {
+    // (usa el backend para que sea 100% confiable aunque la lista local esté desactualizada)
+    const chk = await apiCall('getStudentList', { ciclo_lectivo: origen });
+    const pend = (chk.students || []).filter(s => Number(s.cierre_pendiente || 0) > 0);
+
+    if (pend.length > 0) {
+      const sample = pend.slice(0, 10).map(s =>
+        `${s.apellido}, ${s.nombre} (${s.division || ''} · faltan ${Number(s.cierre_pendiente || 0)})`
+      ).join('\n');
+
+      alert(
+        `No podés crear el ciclo nuevo todavía.\n\n` +
+        `Hay ${pend.length} estudiante(s) con materias sin cierre en el ciclo ${origen}.\n\n` +
+        (sample ? `Ejemplos:\n${sample}\n\n` : '') +
+        `Cerrá esas materias (botón "Cierre") y volvé a intentar.`
+      );
+
+      // Refrescar lista para que veas pendientes arriba (y si estás filtrando, se actualiza)
+      await loadStudents();
+      return;
+    }
+  } catch (e) {
+    console.error(e);
+    alert('No pude verificar si faltan cierres. Probá nuevamente o revisá tu conexión/API KEY.');
+    return;
+  }
 
   let sugerido = '';
   const n = Number(origen);

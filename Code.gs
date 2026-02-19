@@ -302,6 +302,22 @@ function rolloverCycle_(payload) {
   if (!destino) throw new Error('Falta payload.ciclo_destino');
   if (origen === destino) throw new Error('ciclo_origen y ciclo_destino no pueden ser iguales');
 
+  // Chequeo obligatorio: no permitir rollover si quedan materias sin cierre en el ciclo origen
+  const studentsWithFlags = getStudentList_({ ciclo_lectivo: origen });
+  const pendientes = studentsWithFlags.filter(s => Number(s.cierre_pendiente || 0) > 0);
+  if (pendientes.length > 0) {
+    const ejemplo = pendientes.slice(0, 10).map(s =>
+      `${s.apellido}, ${s.nombre} (${s.division || ''} · faltan ${Number(s.cierre_pendiente || 0)})`
+    ).join('\n');
+    throw new Error(
+      `No se puede crear el ciclo nuevo: hay ${pendientes.length} estudiante(s) con materias sin cierre en el ciclo ${origen}.\n\n` +
+      (ejemplo ? `Ejemplos:\n${ejemplo}\n\n` : '') +
+      `Cerrá esas materias y volvé a intentar.`
+    );
+  }
+
+
+
   const cycles = getCycles_();
   const origenExiste = cycles.indexOf(origen) !== -1;
 
