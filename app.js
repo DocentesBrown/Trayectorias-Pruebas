@@ -995,15 +995,6 @@ async function selectStudent(id) {
   try {
     const ciclo = state.ciclo;
 
-    // Asegura que existan filas mínimas en EstadoPorCiclo para este estudiante/ciclo (modo "lazy").
-    // Esto evita inflar la planilla con materias de años futuros.
-    try {
-      await apiCall('syncCatalogRows', { ciclo_lectivo: ciclo, id_estudiante: id, usuario: 'web' });
-    } catch (e) {
-      // No frenamos la carga por un sync: el status puede existir igual
-      console.warn('syncCatalogRows falló:', e);
-    }
-
     const data = await apiCall('getStudentStatus', { ciclo_lectivo: ciclo, id_estudiante: id });
     renderStudent(data.data);
   } finally {

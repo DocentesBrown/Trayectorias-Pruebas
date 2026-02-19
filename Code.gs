@@ -966,6 +966,7 @@ function getStudentStatus_(payload) {
   const catalogFull = getCatalog_();
   const catalog = filterCatalogForStudent_(catalogFull, student);
 
+
   const catalogMap = {};
   const allowed = {};
   catalog.forEach(m => {
@@ -1181,7 +1182,21 @@ function syncCatalogRows_(payload) {
   const grade = Number(student.anio_actual || '');
 
   const catalogFull = getCatalog_();
-  const catalog = filterCatalogForStudent_(catalogFull, student);
+
+  // Optimización: agregamos SOLO materias del año actual (y comunes sin año), no todo el catálogo.
+  // Las adeudadas de años anteriores se arrastran por el rollover, así no inflamos filas.
+  let catalog = [];
+  if (!isNaN(grade) && grade > 0) {
+    catalog = (catalogFull || []).filter(m => {
+      if (!catalogAplicaAStudent_(m, grade, student.orientacion)) return false;
+      const my = Number(m.anio || '');
+      const isSameYear = (!isNaN(my) && my === grade);
+      const isNoYear = (isNaN(my) || my <= 0);
+      return isSameYear || isNoYear;
+    });
+  } else {
+    catalog = filterCatalogForStudent_(catalogFull, student);
+  }
 
   const sh = sheet_(SHEETS.ESTADO);
   const { headers, rows } = getValues_(sh);
