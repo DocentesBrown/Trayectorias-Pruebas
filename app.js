@@ -367,7 +367,7 @@ function computeBuckets(materias, student) {
     const cond = (m.condicion_academica || '').trim().toLowerCase();
     const sit = (m.situacion_actual || '').trim();
 
-    if (cond === 'aprobada') buckets.aprobadas.push(m);
+    if (cond === 'aprobada') { buckets.aprobadas.push(m); return; }
     if (cond === 'adeuda') {
       // Contar como "adeuda" SOLO las materias de años anteriores (no año en curso ni futuros)
       const sitLc = String(sit || '').trim();
@@ -395,6 +395,8 @@ function computeBuckets(materias, student) {
 function counts(materias) {
   let regular = 0, intens = 0;
   materias.forEach(m => {
+    const cond = String(m.condicion_academica || '').trim().toLowerCase();
+    if (cond === 'aprobada') return; // no cuenta como carga de cursada
     const sit = (m.situacion_actual || '').trim();
     if (sit === 'cursa_primera_vez' || sit === 'recursa') regular++;
     if (sit === 'intensifica') intens++;
@@ -994,6 +996,16 @@ async function selectStudent(id) {
 
   try {
     const ciclo = state.ciclo;
+
+    // Asegura que existan filas mínimas en EstadoPorCiclo para este estudiante/ciclo (modo "lazy").
+    // Esto evita inflar la planilla con materias de años futuros.
+    try {
+      await apiCall('syncCatalogRows', { ciclo_lectivo: ciclo, id_estudiante: id, usuario: 'web' });
+    } catch (e) {
+      // No frenamos la carga por un sync: el status puede existir igual
+      console.warn('syncCatalogRows falló:', e);
+    }
+
     const data = await apiCall('getStudentStatus', { ciclo_lectivo: ciclo, id_estudiante: id });
     renderStudent(data.data);
   } finally {
@@ -1183,7 +1195,7 @@ $('btnRollover').onclick = async () => {
 
   const ok = confirm(
     `Esto va a crear (si no existen) filas en EstadoPorCiclo para el ciclo ${destino}, ` +
-    `para TODOS los estudiantes activos y TODAS las materias del catálogo.
+    `para TODOS los estudiantes activos, pero SOLO con las materias que corresponden por año/orientación (modo liviano).
 
 ` +
     `No borra ni modifica ciclos anteriores.

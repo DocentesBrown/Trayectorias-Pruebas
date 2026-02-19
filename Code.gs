@@ -308,6 +308,9 @@ function rolloverCycle_(payload) {
   const students = getStudentList_({}); // activos
   const catalog = getCatalog_();
 
+  const catalogById = {};
+  catalog.forEach(m => { const mid = String(m.id_materia || '').trim(); if (mid) catalogById[mid] = m; });
+
   const sh = sheet_(SHEETS.ESTADO);
 
   // --- 1) Crear filas faltantes del ciclo destino (como antes) ---
@@ -405,14 +408,43 @@ function rolloverCycle_(payload) {
     const targetGrade = (!isNaN(oldYear) && oldYear > 0) ? (updateStudents ? Math.min(oldYear + 1, 6) : Math.min(oldYear, 6)) : null;
     const sDest = Object.assign({}, s, { anio_actual: targetGrade });
 
-    // Catálogo filtrado por orientación (si aplica)
-    const allowedCatalogBase = filterCatalogForStudent_(catalog, sDest);
+    // Materias del año destino (solo el año que corresponde) + adeudadas del ciclo origen (para no inflar filas).
+    // Nota: evitamos crear filas de años anteriores que NO son adeudadas, porque eso multiplica filas y ralentiza la planilla.
+    let allowedCatalogBase = [];
+    if (targetGrade) {
+      allowedCatalogBase = catalog.filter(m => {
+        const mid = String(m.id_materia || '').trim();
+        if (!mid) return false;
+
+        const my = Number(m.anio || '');
+        const isSameYear = (!isNaN(my) && my === targetGrade);
+        const isNoYear = (isNaN(my) || my <= 0); // materias comunes sin año explícito
+
+        if (!(isSameYear || isNoYear)) return false;
+        return catalogAplicaAStudent_(m, targetGrade, sDest.orientacion);
+      });
+    } else {
+      // Sin año definido: fallback seguro (no debería pasar)
+      allowedCatalogBase = filterCatalogForStudent_(catalog, sDest);
+    }
+
+    // Sumar adeudadas del ciclo origen (si existe) para que queden para el próximo ciclo.
+    const owedSet = origenExiste ? (owedInOrigen0[sid] || null) : null;
+    if (owedSet) {
+      Object.keys(owedSet).forEach(mid => {
+        if (!mid) return;
+        const already = allowedCatalogBase.some(x => String(x.id_materia || '').trim() === mid);
+        if (already) return;
+        const cm = catalogById[mid];
+        if (cm) allowedCatalogBase.push(cm);
+        else allowedCatalogBase.push({ id_materia: mid, nombre: '', anio: null, es_troncal: false, orientacion: '' });
+      });
+    }
 
     // Si egresó (venía de 6º en el ciclo origen), en el ciclo destino solo seguimos las materias ADEUDADAS
     // para que pueda cerrar pendientes sin “cargar” materias nuevas.
     let allowedCatalog = allowedCatalogBase;
     if (updateStudents && oldYear === 6 && origenExiste) {
-      const owedSet = owedInOrigen0[sid] || null;
       allowedCatalog = owedSet ? allowedCatalogBase.filter(m => !!owedSet[String(m.id_materia || '').trim()]) : [];
     }
 
@@ -520,6 +552,7 @@ function rolloverCycle_(payload) {
 
 // Map row index (destino) for fast updates
   const destRowIndex = {}; // sid|mid -> i
+  const destMidsByStudent = {}; // sid -> [mid]
   rows.forEach((r, i) => {
     const c = String(r[idx['ciclo_lectivo']] || '').trim();
     if (c !== destino) return;
@@ -528,6 +561,8 @@ function rolloverCycle_(payload) {
     if (!sid || !mid) return;
     if (!activeSet[sid]) return;
     destRowIndex[sid + '|' + mid] = i;
+    if (!destMidsByStudent[sid]) destMidsByStudent[sid] = [];
+    destMidsByStudent[sid].push(mid);
   });
 
   // Primero: resetear campos del destino para estudiantes activos (para evitar basura previa)
@@ -573,8 +608,30 @@ function rolloverCycle_(payload) {
     const newYear = newGradeByStudent[sid];
     if (!newYear) return;
 
-    const newYearMats = (catalogByYear[newYear] || []).slice();
-    const owedAll = (owedByStudent[sid] || []).slice();
+    // Solo tomamos materias que realmente existen en el ciclo destino para este estudiante,
+    // y que aplican por orientación (evita “priorizar” materias que no fueron creadas).
+    const destMids = (destMidsByStudent[sid] || []).slice();
+
+    const newYearMats = destMids
+      .filter(mid => {
+        const key = sid + '|' + mid;
+        const ri = destRowIndex[key];
+        if (ri === undefined) return false;
+        const condLc = String(rows[ri][idx['condicion_academica']] || '').trim().toLowerCase();
+        if (condLc === 'aprobada') return false;
+        const my = catalogYearByMid[mid] || null;
+        return (my && my === newYear);
+      });
+
+    // Adeudadas del origen, pero solo si existen como fila en el destino (porque no inflamos con catálogo completo)
+    let owedAll = (owedByStudent[sid] || []).slice().filter(mid => destRowIndex[sid + '|' + mid] !== undefined);
+
+    // Orden: primero las más “viejas” (año menor) para intensificación / recursada
+    owedAll.sort((a, b) => {
+      const ya = catalogYearByMid[a] || 999;
+      const yb = catalogYearByMid[b] || 999;
+      return (ya - yb) || String(a).localeCompare(String(b));
+    });
 
     // Tope: intensifica máx 4 adeudadas
     const intensifica = owedAll.slice(0, 4);
@@ -681,9 +738,21 @@ function catalogAplicaAStudent_(catMateria, studentGrade, studentOrient) {
 }
 
 function filterCatalogForStudent_(catalog, student) {
-  const grade = Number(student && student.anio_actual || '');
+  // Filtra por orientación (si aplica) y por año (no muestra materias de años posteriores).
+  // Esto reduce filas y acelera la app: las materias futuras se crean recién cuando corresponden.
+  const gradeRaw = student && (student.anio_actual !== undefined ? student.anio_actual : student.anio);
+  const grade = Number(gradeRaw || '');
   const orient = student ? student.orientacion : '';
-  return (catalog || []).filter(m => catalogAplicaAStudent_(m, grade, orient));
+  const hasGrade = !isNaN(grade) && grade > 0;
+
+  return (catalog || []).filter(m => {
+    if (!catalogAplicaAStudent_(m, hasGrade ? grade : null, orient)) return false;
+
+    const my = Number(m && m.anio || '');
+    if (!hasGrade) return true;              // sin dato: no recortamos
+    if (isNaN(my) || my <= 0) return true;   // materias sin año explícito: se mantienen
+    return my <= grade;                      // NO incluir años posteriores
+  });
 }
 
 
@@ -1138,10 +1207,25 @@ function syncCatalogRows_(payload) {
   // Estudiante (para filtrar catálogo por orientación)
   const students = getStudentList_();
   const student = students.find(s => s.id_estudiante === idEst) || { id_estudiante: idEst, anio_actual: null, orientacion: '' };
+  const isEgresado = !!student.egresado;
   const grade = Number(student.anio_actual || '');
 
   const catalogFull = getCatalog_();
-  const catalog = filterCatalogForStudent_(catalogFull, student);
+
+  // Optimización: agregamos SOLO materias del año actual (y comunes sin año), no todo <= año.
+  // Las adeudadas de años anteriores se arrastran por rollover, así no inflamos filas.
+  let catalog = [];
+  if (!isNaN(grade) && grade > 0) {
+    catalog = (catalogFull || []).filter(m => {
+      if (!catalogAplicaAStudent_(m, grade, student.orientacion)) return false;
+      const my = Number(m.anio || '');
+      const isSameYear = (!isNaN(my) && my === grade);
+      const isNoYear = (isNaN(my) || my <= 0);
+      return isSameYear || isNoYear;
+    });
+  } else {
+    catalog = filterCatalogForStudent_(catalogFull, student);
+  }
 
   const sh = sheet_(SHEETS.ESTADO);
   const { headers, rows } = getValues_(sh);
@@ -1185,6 +1269,14 @@ function syncCatalogRows_(payload) {
   const now = new Date();
   let added = 0;
 
+  // Si es egresado/a, NO agregamos materias nuevas automáticamente.
+  // El rollover ya dejó solo las adeudadas para que pueda cerrar pendientes sin inflar filas.
+  if (isEgresado) {
+    return { added: 0, status: getStudentStatus_({ ciclo_lectivo: ciclo, id_estudiante: idEst }) };
+  }
+
+  const toAppend = [];
+
   catalog.forEach(m => {
     if (existing.has(m.id_materia)) return;
 
@@ -1222,18 +1314,18 @@ function syncCatalogRows_(payload) {
     if (obj.hasOwnProperty('fecha_actualizacion')) obj['fecha_actualizacion'] = now;
     if (obj.hasOwnProperty('usuario')) obj['usuario'] = usuario;
 
-    sh.appendRow(headers.map(h => obj[h]));
+    toAppend.push(headers.map(h => obj[h]));
+    existing.add(m.id_materia);
     added++;
   });
+
+  if (toAppend.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, toAppend.length, headers.length).setValues(toAppend);
+  }
 
   return { added, status: getStudentStatus_({ ciclo_lectivo: ciclo, id_estudiante: idEst }) };
 }
 
-
-
-
-// Devuelve resumen por división: cantidad de estudiantes en riesgo (>= umbral adeudadas)
-// payload: { ciclo_lectivo, umbral?:number }
 function getDivisionRiskSummary_(payload) {
   const ciclo = String(payload.ciclo_lectivo || '').trim();
   const umbral = (payload.umbral !== undefined) ? Number(payload.umbral) : 5;
@@ -1336,9 +1428,18 @@ function closeCycle_(payload) {
     const aprobo = (rc === 'aprobada' || rc === 'aprobo' || rc === 'aprobó' || rc === 'si' || rc === 'sí');
     const noAprobo = (rc === 'no_aprobada' || rc === 'no aprobada' || rc === 'no_aprobo' || rc === 'no aprobó' || rc === 'no');
 
-    if (aprobo) row[idx['condicion_academica']] = 'aprobada';
-    else if (noAprobo) row[idx['condicion_academica']] = 'adeuda';
-    else continue; // valor desconocido
+    if (aprobo) {
+      row[idx['condicion_academica']] = 'aprobada';
+      if (idx['nunca_cursada'] !== undefined) row[idx['nunca_cursada']] = false;
+      if (idx['situacion_actual'] !== undefined) row[idx['situacion_actual']] = 'no_cursa_otro_motivo';
+      if (idx['motivo_no_cursa'] !== undefined) row[idx['motivo_no_cursa']] = 'Aprobada (cierre)';
+    } else if (noAprobo) {
+      row[idx['condicion_academica']] = 'adeuda';
+      // Si tuvo resultado de cierre, ya NO es "nunca cursada" (aunque no haya aprobado)
+      if (idx['nunca_cursada'] !== undefined) row[idx['nunca_cursada']] = false;
+      if (idx['situacion_actual'] !== undefined) row[idx['situacion_actual']] = 'no_cursa_otro_motivo';
+      if (idx['motivo_no_cursa'] !== undefined) row[idx['motivo_no_cursa']] = 'No aprobada (adeuda)';
+    } else continue; // valor desconocido
 
     if (marcarCerrado && idx['ciclo_cerrado'] !== undefined) row[idx['ciclo_cerrado']] = true;
     if (idx['fecha_actualizacion'] !== undefined) row[idx['fecha_actualizacion']] = now;
