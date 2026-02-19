@@ -333,6 +333,41 @@
       </div>
     </div>
 
+
+
+    <!-- Modal: Orientación (3º -> 4º) al crear ciclo nuevo -->
+    <div id="modalRolloverOrient" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" id="modalRolloverOrientBackdrop"></div>
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>Orientación para 4º</h2>
+          <button id="btnCloseRolloverOrient" class="btn ghost" type="button">Cerrar</button>
+        </div>
+
+        <p id="rolloverOrientInfo" class="muted"></p>
+
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Estudiante</th>
+                <th>División</th>
+                <th>Orientación</th>
+              </tr>
+            </thead>
+            <tbody id="rolloverOrientTbody"></tbody>
+          </table>
+        </div>
+
+        <div class="row end gap" style="margin-top:12px">
+          <button id="btnCancelRolloverOrient" class="btn ghost" type="button">Cancelar</button>
+          <button id="btnConfirmRolloverOrient" class="btn primary" type="button">Continuar</button>
+        </div>
+
+        <div id="rolloverOrientMsg" class="msg"></div>
+      </div>
+    </div>
+
   <footer class="footer muted">
     Hecho para seguimiento de trayectorias · GitHub Pages + Google Sheets
   </footer>
@@ -352,35 +387,6 @@
         <div id="appLoaderText" class="loader-text">Cargando…</div>
       </div>
 </div>
-    </div>
-  </div>
-
-
-  <!-- Modal: Selección de orientación (3º -> 4º) -->
-  <div id="modalOrient4to" class="modal hidden" aria-hidden="true">
-    <div class="modal-backdrop" id="modalOrient4toBackdrop"></div>
-    <div class="modal-card">
-      <div class="modal-head">
-        <h2>Orientación para 4º</h2>
-        <button id="btnCloseOrient4to" class="btn ghost" type="button">Cerrar</button>
-      </div>
-
-      <div class="modal-body">
-        <p class="muted" style="margin-top:0">
-          Estos estudiantes pasan de 3º a 4º. Elegí la orientación para que al crear el ciclo nuevo ya aparezcan las materias de 4º correspondientes.
-        </p>
-
-        <div id="orient4toList" class="orient4to-list"></div>
-
-        <div class="muted" style="margin-top:10px">
-          * Si falta alguna orientación, no se podrá crear el ciclo nuevo.
-        </div>
-      </div>
-
-      <div class="modal-foot">
-        <button id="btnOrient4toCancel" class="btn ghost" type="button">Cancelar</button>
-        <button id="btnOrient4toConfirm" class="btn primary" type="button">Continuar</button>
-      </div>
     </div>
   </div>
 

@@ -128,9 +128,6 @@ function handleRequest_(req) {
     case 'updateStudentOrientation':
       return { ok: true, data: updateStudentOrientation_(payload) };
 
-    case 'batchUpdateStudentOrientation':
-      return { ok: true, data: batchUpdateStudentOrientation_(payload) };
-
     case 'syncCatalogRows':
       return { ok: true, data: syncCatalogRows_(payload) };
 
@@ -288,7 +285,9 @@ function getCycles_() {
  * Rollover anual: crea filas del nuevo ciclo lectivo SIN tocar ciclos anteriores.
  * - condicion_academica: si alguna vez estuvo aprobada => aprobada; si no => adeuda.
  * - nunca_cursada: TRUE si nunca tuvo cursada regular (cursa_primera_vez o recursa) y no está aprobada.
- * - situacion_actual: se resetea a 'no_cursa_otro_motivo' (neutro)
+ * - situacion_actual: se resetea a 'no_cursa_otro_motivo' (neutral).
+ *
+ * payload: {ciclo_origen, ciclo_destino, usuario, update_students?:boolean, update_division?:boolean}
  */
 function rolloverCycle_(payload) {
   const origen = String(payload.ciclo_origen || '').trim();
@@ -323,29 +322,6 @@ function rolloverCycle_(payload) {
   const origenExiste = cycles.indexOf(origen) !== -1;
 
   const students = getStudentList_({}); // activos
-
-  // Orientaciones para estudiantes que pasan a 4º (se envían desde el frontend en el momento del rollover)
-  // Formato: { "ID_ESTUDIANTE": "Orientación X", ... }
-  let orientMap = payload.orientaciones_por_estudiante || payload.orientaciones || null;
-  if (typeof orientMap === 'string') {
-    try { orientMap = JSON.parse(orientMap); } catch (e) { /* ignore */ }
-  }
-  if (orientMap && typeof orientMap === 'object') {
-    // Persistir en hoja Estudiantes (columna orientacion) y también reflejarlo en la lista en memoria
-    try {
-      batchUpdateStudentOrientation_({ orientaciones: orientMap, usuario });
-    } catch (e) {
-      // Si por alguna razón falla el batch, igual seguimos con las orientaciones en memoria
-    }
-    Object.keys(orientMap).forEach(sid => {
-      const v = String(orientMap[sid] || '').trim();
-      if (!v) return;
-      const st = students.find(ss => ss.id_estudiante === String(sid));
-      if (st) st.orientacion = v;
-    });
-  }
-
-
   const catalog = getCatalog_();
 
   const sh = sheet_(SHEETS.ESTADO);
@@ -490,11 +466,15 @@ function rolloverCycle_(payload) {
 
       if (existsDest[key]) { skipped++; return; }
 
+      // En el ciclo nuevo NO copiamos materias ya aprobadas en ciclos anteriores.
+      // Solo trabajamos con: materias ADEUDADAS + materias del AÑO que corresponde.
       const approved = !!approvedMap[key];
+      if (approved) { skipped++; return; }
+
       const everRegular = !!regularMap[key];
 
-      const condicion = approved ? 'aprobada' : 'adeuda';
-      const nunca = approved ? false : !everRegular;
+      const condicion = 'adeuda';
+      const nunca = !everRegular;
 
       const obj = {};
       headers.forEach(h => obj[h] = '');
@@ -542,7 +522,7 @@ function rolloverCycle_(payload) {
     activeSet[s.id_estudiante] = true;
     const oldYear = Number(s.anio_actual || '');
     oldYearByStudent[s.id_estudiante] = (!isNaN(oldYear) && oldYear > 0) ? Math.min(oldYear, 6) : null;
-    newGradeByStudent[s.id_estudiante] = (!isNaN(oldYear) && oldYear > 0) ? Math.min(oldYear + 1, 6) : null;
+    newGradeByStudent[s.id_estudiante] = (!isNaN(oldYear) && oldYear > 0) ? Math.min((updateStudents ? (oldYear + 1) : oldYear), 6) : null;
   });
 
   const catalogByYear = {};
@@ -641,7 +621,15 @@ function rolloverCycle_(payload) {
     const newYear = newGradeByStudent[sid];
     if (!newYear) return;
 
-    const newYearMats = (catalogByYear[newYear] || []).slice();
+    const oldYear = oldYearByStudent[sid];
+    let newYearMats = [];
+    if (!(updateStudents && oldYear === 6)) {
+      const sDest = Object.assign({}, s, { anio_actual: newYear });
+      newYearMats = filterCatalogForStudent_(catalog, sDest)
+        .filter(mm => Number(mm.anio || '') === Number(newYear))
+        .map(mm => String(mm.id_materia || '').trim())
+        .filter(Boolean);
+    }
     const owedAll = (owedByStudent[sid] || []).slice();
 
     // Tope: intensifica máx 4 adeudadas
@@ -993,7 +981,7 @@ function getStudentStatus_(payload) {
 
   // Catálogo filtrado por orientación (si aplica)
   const catalogFull = getCatalog_();
-  const catalogBase = filterCatalogForStudent_(catalogFull, student);
+  const catalog = filterCatalogForStudent_(catalogFull, student);
 
   const catalogMap = {};
   const allowed = {};
@@ -1193,60 +1181,6 @@ function updateStudentOrientation_(payload) {
   return { id_estudiante: idEst, orientacion: orient };
 }
 
-
-function batchUpdateStudentOrientation_(payload) {
-  payload = payload || {};
-  const orientaciones = payload.orientaciones || payload.map || payload.orientMap || {};
-  const usuario = String(payload.usuario || 'web').trim();
-
-  if (!orientaciones || typeof orientaciones !== 'object') return { updated: 0 };
-
-  const sh = sheet_(SHEETS.ESTUDIANTES);
-  let { headers, rows } = getValues_(sh);
-  let idx = headerMap_(headers);
-
-  // Si no existe la columna, la creamos al final
-  if (idx['orientacion'] === undefined) {
-    sh.insertColumnAfter(headers.length);
-    sh.getRange(1, headers.length + 1).setValue('orientacion');
-    ({ headers, rows } = getValues_(sh));
-    idx = headerMap_(headers);
-  }
-
-  const colOrient = idx['orientacion'];
-  const colUser = (idx['usuario'] !== undefined) ? idx['usuario'] : null;
-  const colFecha = (idx['fecha_actualizacion'] !== undefined) ? idx['fecha_actualizacion'] : null;
-
-  // map id_estudiante -> row index
-  const rowById = {};
-  for (let i = 0; i < rows.length; i++) {
-    const sid = String(rows[i][idx['id_estudiante']] || '').trim();
-    if (sid) rowById[sid] = i;
-  }
-
-  const now = new Date();
-  let updated = 0;
-
-  Object.keys(orientaciones).forEach(sid0 => {
-    const sid = String(sid0 || '').trim();
-    const orient = String(orientaciones[sid0] || '').trim();
-    if (!sid || !orient) return;
-
-    const rIdx = rowById[sid];
-    if (rIdx === undefined) return;
-
-    const rowNum = rIdx + 2; // + header
-    sh.getRange(rowNum, colOrient + 1).setValue(orient);
-    if (colUser !== null) sh.getRange(rowNum, colUser + 1).setValue(usuario);
-    if (colFecha !== null) sh.getRange(rowNum, colFecha + 1).setValue(now);
-    updated++;
-  });
-
-  return { updated };
-}
-
-
-
 function syncCatalogRows_(payload) {
   // Asegurar columnas para cierre
   ensureEstadoColumns_(['resultado_cierre','ciclo_cerrado']);
@@ -1263,16 +1197,44 @@ function syncCatalogRows_(payload) {
   const grade = Number(student.anio_actual || '');
 
   const catalogFull = getCatalog_();
-  const catalogBase = filterCatalogForStudent_(catalogFull, student);
+  const allowedCatalog = filterCatalogForStudent_(catalogFull, student);
+
+  const catalogMap = {};
+  catalogFull.forEach(m => { catalogMap[m.id_materia] = m; });
+
+  const allowedSet = {};
+  allowedCatalog.forEach(m => { allowedSet[String(m.id_materia || '').trim()] = true; });
+
+  // ✅ Regla nueva: NO sincronizamos todo el catálogo.
+  // Solo sincronizamos:
+  //  - materias del AÑO del estudiante (según orientación)
+  //  - materias ADEUDADAS del ciclo anterior (no aprobadas)
+  // Sin traer materias de años FUTUROS ni materias APROBADAS.
+  const yearCatalog = (!isNaN(grade) && grade > 0)
+    ? allowedCatalog.filter(m => Number(m.anio || '') === grade)
+    : [];
 
   const sh = sheet_(SHEETS.ESTADO);
   const { headers, rows } = getValues_(sh);
   const idx = headerMap_(headers);
 
-  // Historial para inferir aprobadas / nunca cursada
   const cycleNum = Number(ciclo);
   const hasCycleNum = !isNaN(cycleNum);
 
+  // Detectar ciclo anterior numérico (si el ciclo actual es numérico)
+  let prevCycleNum = null;
+  if (hasCycleNum) {
+    rows.forEach(r => {
+      const rEst = String(r[idx['id_estudiante']] || '').trim();
+      if (rEst !== idEst) return;
+      const rCiclo = String(r[idx['ciclo_lectivo']] || '').trim();
+      const cNum = Number(rCiclo);
+      if (isNaN(cNum)) return;
+      if (cNum < cycleNum && (prevCycleNum === null || cNum > prevCycleNum)) prevCycleNum = cNum;
+    });
+  }
+
+  // Historial para inferir aprobadas / nunca cursada (solo ciclos anteriores)
   const approvedMap = {}; // mid -> true
   const regularMap = {};  // mid -> true (alguna vez cursó regular)
   rows.forEach(r => {
@@ -1281,7 +1243,6 @@ function syncCatalogRows_(payload) {
     const rMat = String(r[idx['id_materia']] || '').trim();
     if (rEst !== idEst || !rMat) return;
 
-    // Considerar solo ciclos anteriores si son numéricos
     if (hasCycleNum) {
       const cNum = Number(rCiclo);
       if (!isNaN(cNum) && cNum >= cycleNum) return;
@@ -1296,6 +1257,35 @@ function syncCatalogRows_(payload) {
     if (sit === 'cursa_primera_vez' || sit === 'recursa') regularMap[rMat] = true;
   });
 
+  // Adeudadas del ciclo anterior (solo si existe prevCycleNum)
+  const owedFromPrev = {};
+  if (prevCycleNum !== null) {
+    rows.forEach(r => {
+      const rCiclo = String(r[idx['ciclo_lectivo']] || '').trim();
+      const cNum = Number(rCiclo);
+      if (isNaN(cNum) || cNum !== prevCycleNum) return;
+
+      const rEst = String(r[idx['id_estudiante']] || '').trim();
+      if (rEst !== idEst) return;
+
+      const mid = String(r[idx['id_materia']] || '').trim();
+      if (!mid) return;
+
+      // Respetar orientación (si la materia tiene orientación en catálogo)
+      if (!allowedSet[mid]) return;
+
+      const cond = String(r[idx['condicion_academica']] || '').trim().toLowerCase();
+      if (cond !== 'adeuda') return;
+
+      // Evitar traer años futuros
+      const cat = catalogMap[mid];
+      const matYear = cat ? Number(cat.anio || '') : NaN;
+      if (!isNaN(grade) && grade > 0 && !isNaN(matYear) && matYear >= grade) return;
+
+      owedFromPrev[mid] = true;
+    });
+  }
+
   const existing = new Set();
   rows.forEach(r => {
     const rCiclo = String(r[idx['ciclo_lectivo']] || '').trim();
@@ -1304,85 +1294,51 @@ function syncCatalogRows_(payload) {
     if (rCiclo === ciclo && rEst === idEst && rMat) existing.add(rMat);
   });
 
-  
-  // ✅ Mantener performance: NO sincronizamos todo el catálogo.
-  // Solo aseguramos en ESTE ciclo:
-  //  - materias del AÑO que corresponde (según anio_actual)
-  //  - materias ADEUDADAS de ciclos anteriores (sin traer aprobadas ni futuros)
-  const yearByMid = {};
-  (catalogFull || []).forEach(m => {
-    const mid = String(m.id_materia || '').trim();
-    const y = Number(m.anio || '');
-    if (mid && !isNaN(y) && y > 0) yearByMid[mid] = y;
-  });
-
-  const owedSet = {}; // mid -> true
-  rows.forEach(r => {
-    const rCiclo = String(r[idx['ciclo_lectivo']] || '').trim();
-    const rEst = String(r[idx['id_estudiante']] || '').trim();
-    const rMat = String(r[idx['id_materia']] || '').trim();
-    if (rEst !== idEst || !rMat) return;
-    if (rCiclo === ciclo) return;
-
-    const cond = String(r[idx['condicion_academica']] || '').trim().toLowerCase();
-    if (cond !== 'adeuda') return;
-    if (approvedMap[rMat]) return;
-
-    const my = yearByMid[rMat];
-    if (!isNaN(my) && !isNaN(grade) && grade && my > grade) return; // no considerar futuros como adeuda
-
-    owedSet[rMat] = true;
-  });
-
-  const targetY = Number(grade || '');
-  const yearMats = (!isNaN(targetY) && targetY > 0)
-    ? (catalogBase || []).filter(m => Number(m.anio || '') === targetY)
-    : [];
-
-  const owedMats = Object.keys(owedSet).length
-    ? (catalogBase || []).filter(m => !!owedSet[String(m.id_materia || '').trim()])
-    : [];
-
-  // Deduplicar por id_materia
+  // Union: año actual + adeudadas previas
+  const needed = [];
   const seen = {};
-  const allowedCatalog = [];
-  yearMats.concat(owedMats).forEach(mm => {
-    const mid = String(mm.id_materia || '').trim();
+  yearCatalog.forEach(m => {
+    const mid = String(m.id_materia || '').trim();
     if (!mid || seen[mid]) return;
     seen[mid] = true;
-    allowedCatalog.push(mm);
+    needed.push(mid);
+  });
+  Object.keys(owedFromPrev).forEach(mid => {
+    if (!mid || seen[mid]) return;
+    seen[mid] = true;
+    needed.push(mid);
   });
 
-const now = new Date();
+  const now = new Date();
   let added = 0;
 
-  allowedCatalog.forEach(m => {
-    if (existing.has(m.id_materia)) return;
+  needed.forEach(mid => {
+    if (existing.has(mid)) return;
 
-    const approved = !!approvedMap[m.id_materia];
-    const everRegular = !!regularMap[m.id_materia];
+    // No crear filas de materias ya aprobadas
+    if (approvedMap[mid]) return;
 
-    const condicion = approved ? 'aprobada' : 'adeuda';
-    const nunca = approved ? false : !everRegular;
+    const everRegular = !!regularMap[mid];
 
     const obj = {};
     headers.forEach(h => obj[h] = '');
 
     obj['ciclo_lectivo'] = ciclo;
     obj['id_estudiante'] = idEst;
-    obj['id_materia'] = m.id_materia;
+    obj['id_materia'] = mid;
 
-    if (obj.hasOwnProperty('condicion_academica')) obj['condicion_academica'] = condicion;
-    if (obj.hasOwnProperty('nunca_cursada')) obj['nunca_cursada'] = nunca;
+    if (obj.hasOwnProperty('condicion_academica')) obj['condicion_academica'] = 'adeuda';
+    if (obj.hasOwnProperty('nunca_cursada')) obj['nunca_cursada'] = !everRegular;
 
-    // Situación sugerida (simple): futuros -> próximos años, mismo año -> cursa 1ra vez, anteriores -> recursa
+    // Situación sugerida: año -> cursa 1ra vez; adeudada previa -> recursa
     let sit = 'no_cursa_otro_motivo';
     let motivo = '';
-    const matYear = Number(m.anio || '');
-    if (!isNaN(matYear) && !isNaN(grade) && grade) {
-      if (matYear > grade) { sit = 'proximos_anos'; motivo = 'Próximos años (aún no corresponde)'; }
-      else if (!approved && matYear === grade) { sit = 'cursa_primera_vez'; }
-      else if (!approved && matYear < grade) { sit = 'recursa'; }
+    const cat = catalogMap[mid] || {};
+    const matYear = Number(cat.anio || '');
+
+    if (!isNaN(grade) && grade > 0 && !isNaN(matYear) && matYear > 0) {
+      if (matYear === grade) sit = 'cursa_primera_vez';
+      else if (matYear < grade) sit = 'recursa';
     }
 
     if (obj.hasOwnProperty('situacion_actual')) obj['situacion_actual'] = sit;
@@ -1404,7 +1360,6 @@ const now = new Date();
 
 
 // Devuelve resumen por división: cantidad de estudiantes en riesgo (>= umbral adeudadas)
-// payload: { ciclo_lectivo, umbral?:number }
 // payload: { ciclo_lectivo, umbral?:number }
 function getDivisionRiskSummary_(payload) {
   const ciclo = String(payload.ciclo_lectivo || '').trim();

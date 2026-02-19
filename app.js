@@ -58,7 +58,12 @@ let state = {
   originalByMateria: new Map(), // id_materia -> snapshot
   dirtyByMateria: new Map(),     // id_materia -> fields changed
   filters: { course: '', onlyPending: false, onlyRisk: false },
-  pickerJustOpenedAt: 0
+  pickerJustOpenedAt: 0,
+
+  // Modal (Crear ciclo nuevo): selección de orientaciones 3º->4º
+  _rolloverOrientResolve: null,
+  _rolloverOrientReject: null,
+  _rolloverOrientContext: null
 
 };
 
@@ -735,6 +740,110 @@ function setModalVisible(modalId, visible) {
   el.setAttribute('aria-hidden', visible ? 'false' : 'true');
 }
 
+
+// ======== Crear ciclo nuevo: Orientación 3º -> 4º (modal) ========
+
+function renderRolloverOrientModal_(students, origen, destino) {
+  const info = $('rolloverOrientInfo');
+  const tbody = $('rolloverOrientTbody');
+  setMessage('rolloverOrientMsg', '', '');
+
+  if (info) {
+    info.textContent = `Estos estudiantes pasan de 3º a 4º al crear el ciclo ${destino}. Elegí la orientación para cada uno (se guarda antes de crear el ciclo).`;
+  }
+  if (!tbody) return;
+
+  const opts = state.orientaciones || [];
+  tbody.innerHTML = '';
+
+  students.forEach(s => {
+    const tr = document.createElement('tr');
+
+    const tdName = document.createElement('td');
+    const displayName = (`${s.apellido || ''}, ${s.nombre || ''}`).replace(/^,\s*/, '').trim() || (s.nombre || s.apellido || s.id_estudiante || '');
+    tdName.textContent = displayName;
+
+    const tdDiv = document.createElement('td');
+    tdDiv.textContent = `${s.division || ''}${s.turno ? ' · ' + s.turno : ''}`.trim();
+
+    const tdSel = document.createElement('td');
+    const sel = document.createElement('select');
+    sel.className = 'select';
+    sel.dataset.sid = s.id_estudiante;
+
+    const o0 = document.createElement('option');
+    o0.value = '';
+    o0.textContent = '— Elegí —';
+    sel.appendChild(o0);
+
+    opts.forEach(o => {
+      const opt = document.createElement('option');
+      opt.value = o;
+      opt.textContent = o;
+      sel.appendChild(opt);
+    });
+
+    sel.value = s.orientacion || '';
+
+    tdSel.appendChild(sel);
+
+    tr.appendChild(tdName);
+    tr.appendChild(tdDiv);
+    tr.appendChild(tdSel);
+    tbody.appendChild(tr);
+  });
+}
+
+function openRolloverOrientModal_(students, origen, destino) {
+  return new Promise(resolve => {
+    state._rolloverOrientResolve = resolve;
+    state._rolloverOrientReject = null;
+    state._rolloverOrientContext = { students, origen, destino };
+
+    renderRolloverOrientModal_(students, origen, destino);
+    setModalVisible('modalRolloverOrient', true);
+  });
+}
+
+function closeRolloverOrientModal_(result) {
+  setModalVisible('modalRolloverOrient', false);
+
+  const resolve = state._rolloverOrientResolve;
+  state._rolloverOrientResolve = null;
+  state._rolloverOrientReject = null;
+  state._rolloverOrientContext = null;
+
+  if (resolve) resolve(result);
+}
+
+function cancelRolloverOrientModal_() {
+  closeRolloverOrientModal_(null);
+}
+
+function confirmRolloverOrientModal_() {
+  const tbody = $('rolloverOrientTbody');
+  if (!tbody) return;
+
+  const selects = tbody.querySelectorAll('select[data-sid]');
+  const map = {};
+  let missing = 0;
+
+  selects.forEach(sel => {
+    const sid = sel.dataset.sid;
+    const val = (sel.value || '').trim();
+    if (!val) missing++;
+    else map[sid] = val;
+  });
+
+  if (missing > 0) {
+    setMessage('rolloverOrientMsg', `Te falta elegir orientación en ${missing} estudiante(s).`, 'err');
+    return;
+  }
+
+  closeRolloverOrientModal_(map);
+}
+
+
 // ======== Cierre por estudiante (modal) ========
 
 function createCierreToggle_(id_materia, current){
@@ -821,96 +930,6 @@ function renderCierreModal() {
   if (total && faltan === 0) setMessage('cierreMsg', 'Todo marcado ✅ (guardá para aplicar)', 'ok');
   else if (total) setMessage('cierreMsg', `Te faltan ${faltan} materias por marcar.`, '');
 }
-
-// ======== Orientación 3º -> 4º (modal) ========
-async function chooseOrientationsFor4to_(students3to4) {
-  const list = Array.isArray(students3to4) ? students3to4 : [];
-  if (list.length === 0) return {};
-
-  return await new Promise((resolve) => {
-    const modalId = 'modalOrient4to';
-    const container = $('orient4toList');
-    const opts = state.orientaciones || [];
-
-    container.innerHTML = '';
-    const selectsById = {};
-
-    list.forEach(s => {
-      const row = document.createElement('div');
-      row.className = 'orient4to-row';
-
-      const left = document.createElement('div');
-      const nm = document.createElement('div');
-      nm.className = 'orient4to-name';
-      nm.textContent = `${s.apellido || ''}, ${s.nombre || ''}`.trim();
-      const sub = document.createElement('div');
-      sub.className = 'orient4to-sub';
-      sub.textContent = `${s.division || ''} · pasa a 4º`.trim();
-      left.appendChild(nm);
-      left.appendChild(sub);
-
-      const sel = document.createElement('select');
-      sel.className = 'input';
-      const opt0 = document.createElement('option');
-      opt0.value = '';
-      opt0.textContent = '— Elegí orientación —';
-      sel.appendChild(opt0);
-
-      opts.forEach(o => {
-        const op = document.createElement('option');
-        op.value = o;
-        op.textContent = o;
-        sel.appendChild(op);
-      });
-
-      sel.value = s.orientacion || '';
-      selectsById[s.id_estudiante] = sel;
-
-      row.appendChild(left);
-      row.appendChild(sel);
-      container.appendChild(row);
-    });
-
-    const close = () => {
-      setModalVisible(modalId, false);
-      // cleanup
-      $('btnCloseOrient4to').onclick = null;
-      $('btnOrient4toCancel').onclick = null;
-      $('btnOrient4toConfirm').onclick = null;
-      $('modalOrient4toBackdrop').onclick = null;
-    };
-
-    const onCancel = () => { close(); resolve(null); };
-
-    const onConfirm = () => {
-      const map = {};
-      const faltan = [];
-
-      list.forEach(s => {
-        const sel = selectsById[s.id_estudiante];
-        const v = (sel && sel.value) ? String(sel.value).trim() : '';
-        if (!v) faltan.push(`${s.apellido || ''}, ${s.nombre || ''}`.trim());
-        else map[s.id_estudiante] = v;
-      });
-
-      if (faltan.length > 0) {
-        alert('Falta elegir orientación para:\n\n' + faltan.slice(0, 30).join('\n') + (faltan.length > 30 ? `\n… (+${faltan.length - 30})` : ''));
-        return;
-      }
-
-      close();
-      resolve(map);
-    };
-
-    $('btnCloseOrient4to').onclick = onCancel;
-    $('btnOrient4toCancel').onclick = onCancel;
-    $('modalOrient4toBackdrop').onclick = onCancel;
-    $('btnOrient4toConfirm').onclick = onConfirm;
-
-    setModalVisible(modalId, true);
-  });
-}
-
 
 function cierreProgress_() {
   if (!state.studentData) return { total: 0, faltan: 0 };
@@ -1249,6 +1268,12 @@ $('btnCloseCierre').onclick = () => setModalVisible('modalCierre', false);
 $('modalCierreBackdrop').onclick = () => setModalVisible('modalCierre', false);
 $('btnSaveCierre').onclick = saveChangesFromCierreModal;
 
+// Modal (Crear ciclo): orientaciones 3º -> 4º
+if ($('btnCloseRolloverOrient')) $('btnCloseRolloverOrient').onclick = cancelRolloverOrientModal_;
+if ($('btnCancelRolloverOrient')) $('btnCancelRolloverOrient').onclick = cancelRolloverOrientModal_;
+if ($('modalRolloverOrientBackdrop')) $('modalRolloverOrientBackdrop').onclick = cancelRolloverOrientModal_;
+if ($('btnConfirmRolloverOrient')) $('btnConfirmRolloverOrient').onclick = confirmRolloverOrientModal_;
+
 $('btnRefresh').onclick = async () => {
   if (!state.apiKey && !localStorage.getItem(LS_KEY)) return;
   setBtnLoading($('btnRefresh'), true, 'Actualizando…');
@@ -1272,17 +1297,14 @@ $('btnRollover').onclick = async () => {
   const origen = (prompt('Año origen (ej. 2026):', state.ciclo) || '').trim();
   if (!origen) return;
 
-  let chkStudents = null;
+  let origenStudents = [];
 
   // Chequeo obligatorio: NO permitir crear ciclo nuevo si hay estudiantes con materias sin cierre en el ciclo origen
   try {
     // (usa el backend para que sea 100% confiable aunque la lista local esté desactualizada)
     const chk = await apiCall('getStudentList', { ciclo_lectivo: origen });
-    chkStudents = (chk.students || []);
-    // refrescar estado local para que el reordenamiento (cerrados al fondo) sea consistente
-    state.students = chkStudents;
-    renderStudents(state.students);
-    const pend = (chkStudents || []).filter(s => Number(s.cierre_pendiente || 0) > 0);
+    origenStudents = chk.students || [];
+    const pend = origenStudents.filter(s => Number(s.cierre_pendiente || 0) > 0);
 
     if (pend.length > 0) {
       const sample = pend.slice(0, 10).map(s =>
@@ -1315,41 +1337,61 @@ $('btnRollover').onclick = async () => {
 
   if (destino === origen) return alert('El año destino no puede ser igual al origen.');
 
+  // Antes de crear el ciclo: si hay estudiantes que pasan de 3º -> 4º, pedir orientación para cada uno
+  const pasarA4 = (origenStudents || []).filter(s => Number(s.anio_actual || 0) === 3);
+
+  if (pasarA4.length > 0 && (state.orientaciones || []).length > 0) {
+    const orientMap = await openRolloverOrientModal_(pasarA4, origen, destino);
+    if (!orientMap) return; // canceló
+
+    // Guardar solo cambios (para no spamear el backend)
+    const cambios = {};
+    pasarA4.forEach(s => {
+      const sid = s.id_estudiante;
+      const val = (orientMap[sid] || '').trim();
+      if (!val) return;
+      if ((s.orientacion || '') !== val) cambios[sid] = val;
+    });
+
+    if (Object.keys(cambios).length > 0) {
+      showAppLoader_('Guardando orientaciones…');
+      await ensurePaint_();
+      try {
+        for (const sid of Object.keys(cambios)) {
+          await apiCall('updateStudentOrientation', {
+            id_estudiante: sid,
+            orientacion: cambios[sid],
+            ciclo_lectivo: destino,
+            usuario: 'web'
+          });
+        }
+      } catch (err) {
+        console.error(err);
+        alert('No pude guardar las orientaciones. Revisá tu conexión/API KEY e intentá de nuevo.\n\n' + (err?.message || err));
+        return;
+      } finally {
+        hideAppLoader_();
+      }
+    }
+  }
+
   const ok = confirm(
-    `Esto va a crear (si no existen) filas en EstadoPorCiclo para el ciclo ${destino}, ` +
-    `para todos los estudiantes activos, trayendo SOLO las materias del año correspondiente + las adeudadas (sin cargar aprobadas viejas ni años posteriores).
-
-` +
-    `No borra ni modifica ciclos anteriores.
-
-¿Continuar?`
+    `Esto va a crear (si no existen) filas en EstadoPorCiclo para el ciclo ${destino}.\n\n` +
+    `✅ Solo se crean: materias ADEUDADAS + materias del AÑO (respetando orientación).\n` +
+    `❌ No se copian materias aprobadas de años anteriores ni materias de años posteriores.\n\n` +
+    `No borra ni modifica ciclos anteriores.\n\n¿Continuar?`
   );
   if (!ok) return;
 
-    try {
+  try {
     setBtnLoading($('btnRollover'), true, 'Creando ciclo…');
-        // Elegir orientación para quienes pasan de 3º a 4º (si corresponde)
-    const list3to4 = (chkStudents || state.students || []).filter(s => !s.egresado && Number(s.anio_actual || 0) === 3);
-    let orientMap = {};
-    if (list3to4.length > 0) {
-      const picked = await chooseOrientationsFor4to_(list3to4);
-      if (picked === null) { setBtnLoading($('btnRollover'), false); return; }
-      orientMap = picked || {};
-    }
-
-    const res = await apiCall('rolloverCycle', { ciclo_origen: origen, ciclo_destino: destino, usuario: 'web', update_students: true, update_division: true, orientaciones_por_estudiante: orientMap });
+    const res = await apiCall('rolloverCycle', { ciclo_origen: origen, ciclo_destino: destino, usuario: 'web', update_students: true, update_division: true });
     alert(
-      `Rollover listo ✅
-
-` +
-      `Origen: ${res.data.ciclo_origen} (existe: ${res.data.origen_existe})
-` +
-      `Destino: ${res.data.ciclo_destino}
-` +
-      `Filas creadas: ${res.data.filas_creadas}
-` +
-      `Omitidas (ya existían): ${res.data.filas_omitidas_ya_existian}
-` +
+      `Rollover listo ✅\n\n` +
+      `Origen: ${res.data.ciclo_origen} (existe: ${res.data.origen_existe})\n` +
+      `Destino: ${res.data.ciclo_destino}\n` +
+      `Filas creadas: ${res.data.filas_creadas}\n` +
+      `Omitidas (ya existían): ${res.data.filas_omitidas_ya_existian}\n` +
       (res.data.estudiantes_promovidos ? `Estudiantes promovidos: ${res.data.estudiantes_promovidos}\nDivisiones actualizadas: ${res.data.divisiones_actualizadas}` : 'Estudiantes promovidos: 0') +
       `\nRevisión manual (rosado): ${res.data.estudiantes_revision_manual || 0}`
     );
