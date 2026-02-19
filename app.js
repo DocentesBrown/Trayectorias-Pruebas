@@ -994,7 +994,6 @@ async function selectStudent(id) {
 
   try {
     const ciclo = state.ciclo;
-
     const data = await apiCall('getStudentStatus', { ciclo_lectivo: ciclo, id_estudiante: id });
     renderStudent(data.data);
   } finally {
@@ -1184,7 +1183,7 @@ $('btnRollover').onclick = async () => {
 
   const ok = confirm(
     `Esto va a crear (si no existen) filas en EstadoPorCiclo para el ciclo ${destino}, ` +
-    `para TODOS los estudiantes activos, pero SOLO con las materias que corresponden por año/orientación (modo liviano).
+    `para TODOS los estudiantes activos y TODAS las materias del catálogo.
 
 ` +
     `No borra ni modifica ciclos anteriores.
