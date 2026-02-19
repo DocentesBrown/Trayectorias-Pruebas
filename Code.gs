@@ -408,12 +408,40 @@ function rolloverCycle_(payload) {
     // Catálogo filtrado por orientación (si aplica)
     const allowedCatalogBase = filterCatalogForStudent_(catalog, sDest);
 
-    // Si egresó (venía de 6º en el ciclo origen), en el ciclo destino solo seguimos las materias ADEUDADAS
-    // para que pueda cerrar pendientes sin “cargar” materias nuevas.
+    // ✅ Optimización: NO cargamos todo el catálogo en cada ciclo.
+    // Solo creamos filas para:
+    //  - materias del año que le corresponde cursar en el ciclo destino (cursa por 1ra vez)
+    //  - materias ADEUDADAS del ciclo origen (para intensificar/recursar)
+    // De esta forma, las materias se van "sumando" a medida que avanza de año y la app no se vuelve lenta.
+
+    // Caso especial egreso: si venía de 6º en el ciclo origen, en el ciclo destino solo seguimos las ADEUDADAS
+    // (sin “cargar” materias nuevas).
     let allowedCatalog = allowedCatalogBase;
     if (updateStudents && oldYear === 6 && origenExiste) {
       const owedSet = owedInOrigen0[sid] || null;
-      allowedCatalog = owedSet ? allowedCatalogBase.filter(m => !!owedSet[String(m.id_materia || '').trim()]) : [];
+      allowedCatalog = owedSet
+        ? allowedCatalogBase.filter(m => !!owedSet[String(m.id_materia || '').trim()])
+        : [];
+    } else {
+      const targetY = Number(sDest.anio_actual || '');
+      const owedSet = origenExiste ? (owedInOrigen0[sid] || {}) : {};
+      const yearMats = (!isNaN(targetY) && targetY > 0)
+        ? allowedCatalogBase.filter(m => Number(m.anio || '') === targetY)
+        : [];
+
+      const owedMats = Object.keys(owedSet).length
+        ? allowedCatalogBase.filter(m => !!owedSet[String(m.id_materia || '').trim()])
+        : [];
+
+      // Deduplicar por id_materia
+      const seen = {};
+      allowedCatalog = [];
+      yearMats.concat(owedMats).forEach(mm => {
+        const mid = String(mm.id_materia || '').trim();
+        if (!mid || seen[mid]) return;
+        seen[mid] = true;
+        allowedCatalog.push(mm);
+      });
     }
 
     allowedCatalog.forEach(m => {
@@ -1336,9 +1364,17 @@ function closeCycle_(payload) {
     const aprobo = (rc === 'aprobada' || rc === 'aprobo' || rc === 'aprobó' || rc === 'si' || rc === 'sí');
     const noAprobo = (rc === 'no_aprobada' || rc === 'no aprobada' || rc === 'no_aprobo' || rc === 'no aprobó' || rc === 'no');
 
-    if (aprobo) row[idx['condicion_academica']] = 'aprobada';
-    else if (noAprobo) row[idx['condicion_academica']] = 'adeuda';
-    else continue; // valor desconocido
+    if (aprobo) {
+      row[idx['condicion_academica']] = 'aprobada';
+      // Si aprobó, la materia deja de figurar como cursa/recursa/intensifica en el panel
+      if (idx['situacion_actual'] !== undefined) row[idx['situacion_actual']] = '';
+      if (idx['motivo_no_cursa'] !== undefined) row[idx['motivo_no_cursa']] = '';
+      if (idx['nunca_cursada'] !== undefined) row[idx['nunca_cursada']] = false;
+    } else if (noAprobo) {
+      row[idx['condicion_academica']] = 'adeuda';
+      // Si no aprobó, queda adeudada para el próximo ciclo (mantenemos la situación actual)
+      if (idx['nunca_cursada'] !== undefined) row[idx['nunca_cursada']] = false;
+    } else continue; // valor desconocido
 
     if (marcarCerrado && idx['ciclo_cerrado'] !== undefined) row[idx['ciclo_cerrado']] = true;
     if (idx['fecha_actualizacion'] !== undefined) row[idx['fecha_actualizacion']] = now;

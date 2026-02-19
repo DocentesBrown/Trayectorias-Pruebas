@@ -368,6 +368,7 @@ function computeBuckets(materias, student) {
     const sit = (m.situacion_actual || '').trim();
 
     if (cond === 'aprobada') buckets.aprobadas.push(m);
+    if (cond === 'aprobada') return;
     if (cond === 'adeuda') {
       // Contar como "adeuda" SOLO las materias de años anteriores (no año en curso ni futuros)
       const sitLc = String(sit || '').trim();
