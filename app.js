@@ -807,7 +807,20 @@ function renderCierreModal() {
     const tr = document.createElement('tr');
 
     tr.innerHTML = `
-      <td data-label="Materia">${escapeHtml(m.n
+      <td data-label="Materia">${escapeHtml(m.nombre || m.id_materia)} <div class="muted">${escapeHtml(m.id_materia)}</div></td>
+      <td data-label="Año">${escapeHtml(m.anio || '')}</td>
+      <td data-label="Situación">${escapeHtml(cierreLabel(m.situacion_actual))}</td>
+      <td data-label="Resultado"></td>
+    `;
+
+    tr.children[3].appendChild(createCierreToggle_(m.id_materia, (m.resultado_cierre || '').trim()));
+    tbody.appendChild(tr);
+  });
+
+  const { faltan, total } = cierreProgress_();
+  if (total && faltan === 0) setMessage('cierreMsg', 'Todo marcado ✅ (guardá para aplicar)', 'ok');
+  else if (total) setMessage('cierreMsg', `Te faltan ${faltan} materias por marcar.`, '');
+}
 
 // ======== Orientación 3º -> 4º (modal) ========
 async function chooseOrientationsFor4to_(students3to4) {
@@ -898,21 +911,6 @@ async function chooseOrientationsFor4to_(students3to4) {
   });
 }
 
-
-ombre || m.id_materia)} <div class="muted">${escapeHtml(m.id_materia)}</div></td>
-      <td data-label="Año">${escapeHtml(m.anio || '')}</td>
-      <td data-label="Situación">${escapeHtml(cierreLabel(m.situacion_actual))}</td>
-      <td data-label="Resultado"></td>
-    `;
-
-    tr.children[3].appendChild(createCierreToggle_(m.id_materia, (m.resultado_cierre || '').trim()));
-    tbody.appendChild(tr);
-  });
-
-  const { faltan, total } = cierreProgress_();
-  if (total && faltan === 0) setMessage('cierreMsg', 'Todo marcado ✅ (guardá para aplicar)', 'ok');
-  else if (total) setMessage('cierreMsg', `Te faltan ${faltan} materias por marcar.`, '');
-}
 
 function cierreProgress_() {
   if (!state.studentData) return { total: 0, faltan: 0 };

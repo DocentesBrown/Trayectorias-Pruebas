@@ -288,7 +288,9 @@ function getCycles_() {
  * Rollover anual: crea filas del nuevo ciclo lectivo SIN tocar ciclos anteriores.
  * - condicion_academica: si alguna vez estuvo aprobada => aprobada; si no => adeuda.
  * - nunca_cursada: TRUE si nunca tuvo cursada regular (cursa_primera_vez o recursa) y no está aprobada.
- * - situacion_actual: se resetea a 'no_cursa_otro_motivo' (neufunction rolloverCycle_(payload) {
+ * - situacion_actual: se resetea a 'no_cursa_otro_motivo' (neutro)
+ */
+function rolloverCycle_(payload) {
   const origen = String(payload.ciclo_origen || '').trim();
   const destino = String(payload.ciclo_destino || '').trim();
   const usuario = String(payload.usuario || 'rollover').trim();
@@ -1403,7 +1405,6 @@ const now = new Date();
 
 // Devuelve resumen por división: cantidad de estudiantes en riesgo (>= umbral adeudadas)
 // payload: { ciclo_lectivo, umbral?:number }
- por división: cantidad de estudiantes en riesgo (>= umbral adeudadas)
 // payload: { ciclo_lectivo, umbral?:number }
 function getDivisionRiskSummary_(payload) {
   const ciclo = String(payload.ciclo_lectivo || '').trim();
