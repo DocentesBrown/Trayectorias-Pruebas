@@ -355,5 +355,34 @@
     </div>
   </div>
 
+
+  <!-- Modal: Selección de orientación (3º -> 4º) -->
+  <div id="modalOrient4to" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" id="modalOrient4toBackdrop"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Orientación para 4º</h2>
+        <button id="btnCloseOrient4to" class="btn ghost" type="button">Cerrar</button>
+      </div>
+
+      <div class="modal-body">
+        <p class="muted" style="margin-top:0">
+          Estos estudiantes pasan de 3º a 4º. Elegí la orientación para que al crear el ciclo nuevo ya aparezcan las materias de 4º correspondientes.
+        </p>
+
+        <div id="orient4toList" class="orient4to-list"></div>
+
+        <div class="muted" style="margin-top:10px">
+          * Si falta alguna orientación, no se podrá crear el ciclo nuevo.
+        </div>
+      </div>
+
+      <div class="modal-foot">
+        <button id="btnOrient4toCancel" class="btn ghost" type="button">Cancelar</button>
+        <button id="btnOrient4toConfirm" class="btn primary" type="button">Continuar</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

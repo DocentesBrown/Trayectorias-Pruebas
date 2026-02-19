@@ -128,6 +128,9 @@ function handleRequest_(req) {
     case 'updateStudentOrientation':
       return { ok: true, data: updateStudentOrientation_(payload) };
 
+    case 'batchUpdateStudentOrientation':
+      return { ok: true, data: batchUpdateStudentOrientation_(payload) };
+
     case 'syncCatalogRows':
       return { ok: true, data: syncCatalogRows_(payload) };
 
@@ -285,11 +288,7 @@ function getCycles_() {
  * Rollover anual: crea filas del nuevo ciclo lectivo SIN tocar ciclos anteriores.
  * - condicion_academica: si alguna vez estuvo aprobada => aprobada; si no => adeuda.
  * - nunca_cursada: TRUE si nunca tuvo cursada regular (cursa_primera_vez o recursa) y no está aprobada.
- * - situacion_actual: se resetea a 'no_cursa_otro_motivo' (neutral).
- *
- * payload: {ciclo_origen, ciclo_destino, usuario, update_students?:boolean, update_division?:boolean}
- */
-function rolloverCycle_(payload) {
+ * - situacion_actual: se resetea a 'no_cursa_otro_motivo' (neufunction rolloverCycle_(payload) {
   const origen = String(payload.ciclo_origen || '').trim();
   const destino = String(payload.ciclo_destino || '').trim();
   const usuario = String(payload.usuario || 'rollover').trim();
@@ -322,6 +321,29 @@ function rolloverCycle_(payload) {
   const origenExiste = cycles.indexOf(origen) !== -1;
 
   const students = getStudentList_({}); // activos
+
+  // Orientaciones para estudiantes que pasan a 4º (se envían desde el frontend en el momento del rollover)
+  // Formato: { "ID_ESTUDIANTE": "Orientación X", ... }
+  let orientMap = payload.orientaciones_por_estudiante || payload.orientaciones || null;
+  if (typeof orientMap === 'string') {
+    try { orientMap = JSON.parse(orientMap); } catch (e) { /* ignore */ }
+  }
+  if (orientMap && typeof orientMap === 'object') {
+    // Persistir en hoja Estudiantes (columna orientacion) y también reflejarlo en la lista en memoria
+    try {
+      batchUpdateStudentOrientation_({ orientaciones: orientMap, usuario });
+    } catch (e) {
+      // Si por alguna razón falla el batch, igual seguimos con las orientaciones en memoria
+    }
+    Object.keys(orientMap).forEach(sid => {
+      const v = String(orientMap[sid] || '').trim();
+      if (!v) return;
+      const st = students.find(ss => ss.id_estudiante === String(sid));
+      if (st) st.orientacion = v;
+    });
+  }
+
+
   const catalog = getCatalog_();
 
   const sh = sheet_(SHEETS.ESTADO);
@@ -969,7 +991,7 @@ function getStudentStatus_(payload) {
 
   // Catálogo filtrado por orientación (si aplica)
   const catalogFull = getCatalog_();
-  const catalog = filterCatalogForStudent_(catalogFull, student);
+  const catalogBase = filterCatalogForStudent_(catalogFull, student);
 
   const catalogMap = {};
   const allowed = {};
@@ -1169,6 +1191,60 @@ function updateStudentOrientation_(payload) {
   return { id_estudiante: idEst, orientacion: orient };
 }
 
+
+function batchUpdateStudentOrientation_(payload) {
+  payload = payload || {};
+  const orientaciones = payload.orientaciones || payload.map || payload.orientMap || {};
+  const usuario = String(payload.usuario || 'web').trim();
+
+  if (!orientaciones || typeof orientaciones !== 'object') return { updated: 0 };
+
+  const sh = sheet_(SHEETS.ESTUDIANTES);
+  let { headers, rows } = getValues_(sh);
+  let idx = headerMap_(headers);
+
+  // Si no existe la columna, la creamos al final
+  if (idx['orientacion'] === undefined) {
+    sh.insertColumnAfter(headers.length);
+    sh.getRange(1, headers.length + 1).setValue('orientacion');
+    ({ headers, rows } = getValues_(sh));
+    idx = headerMap_(headers);
+  }
+
+  const colOrient = idx['orientacion'];
+  const colUser = (idx['usuario'] !== undefined) ? idx['usuario'] : null;
+  const colFecha = (idx['fecha_actualizacion'] !== undefined) ? idx['fecha_actualizacion'] : null;
+
+  // map id_estudiante -> row index
+  const rowById = {};
+  for (let i = 0; i < rows.length; i++) {
+    const sid = String(rows[i][idx['id_estudiante']] || '').trim();
+    if (sid) rowById[sid] = i;
+  }
+
+  const now = new Date();
+  let updated = 0;
+
+  Object.keys(orientaciones).forEach(sid0 => {
+    const sid = String(sid0 || '').trim();
+    const orient = String(orientaciones[sid0] || '').trim();
+    if (!sid || !orient) return;
+
+    const rIdx = rowById[sid];
+    if (rIdx === undefined) return;
+
+    const rowNum = rIdx + 2; // + header
+    sh.getRange(rowNum, colOrient + 1).setValue(orient);
+    if (colUser !== null) sh.getRange(rowNum, colUser + 1).setValue(usuario);
+    if (colFecha !== null) sh.getRange(rowNum, colFecha + 1).setValue(now);
+    updated++;
+  });
+
+  return { updated };
+}
+
+
+
 function syncCatalogRows_(payload) {
   // Asegurar columnas para cierre
   ensureEstadoColumns_(['resultado_cierre','ciclo_cerrado']);
@@ -1185,7 +1261,7 @@ function syncCatalogRows_(payload) {
   const grade = Number(student.anio_actual || '');
 
   const catalogFull = getCatalog_();
-  const catalog = filterCatalogForStudent_(catalogFull, student);
+  const catalogBase = filterCatalogForStudent_(catalogFull, student);
 
   const sh = sheet_(SHEETS.ESTADO);
   const { headers, rows } = getValues_(sh);
@@ -1226,10 +1302,59 @@ function syncCatalogRows_(payload) {
     if (rCiclo === ciclo && rEst === idEst && rMat) existing.add(rMat);
   });
 
-  const now = new Date();
+  
+  // ✅ Mantener performance: NO sincronizamos todo el catálogo.
+  // Solo aseguramos en ESTE ciclo:
+  //  - materias del AÑO que corresponde (según anio_actual)
+  //  - materias ADEUDADAS de ciclos anteriores (sin traer aprobadas ni futuros)
+  const yearByMid = {};
+  (catalogFull || []).forEach(m => {
+    const mid = String(m.id_materia || '').trim();
+    const y = Number(m.anio || '');
+    if (mid && !isNaN(y) && y > 0) yearByMid[mid] = y;
+  });
+
+  const owedSet = {}; // mid -> true
+  rows.forEach(r => {
+    const rCiclo = String(r[idx['ciclo_lectivo']] || '').trim();
+    const rEst = String(r[idx['id_estudiante']] || '').trim();
+    const rMat = String(r[idx['id_materia']] || '').trim();
+    if (rEst !== idEst || !rMat) return;
+    if (rCiclo === ciclo) return;
+
+    const cond = String(r[idx['condicion_academica']] || '').trim().toLowerCase();
+    if (cond !== 'adeuda') return;
+    if (approvedMap[rMat]) return;
+
+    const my = yearByMid[rMat];
+    if (!isNaN(my) && !isNaN(grade) && grade && my > grade) return; // no considerar futuros como adeuda
+
+    owedSet[rMat] = true;
+  });
+
+  const targetY = Number(grade || '');
+  const yearMats = (!isNaN(targetY) && targetY > 0)
+    ? (catalogBase || []).filter(m => Number(m.anio || '') === targetY)
+    : [];
+
+  const owedMats = Object.keys(owedSet).length
+    ? (catalogBase || []).filter(m => !!owedSet[String(m.id_materia || '').trim()])
+    : [];
+
+  // Deduplicar por id_materia
+  const seen = {};
+  const allowedCatalog = [];
+  yearMats.concat(owedMats).forEach(mm => {
+    const mid = String(mm.id_materia || '').trim();
+    if (!mid || seen[mid]) return;
+    seen[mid] = true;
+    allowedCatalog.push(mm);
+  });
+
+const now = new Date();
   let added = 0;
 
-  catalog.forEach(m => {
+  allowedCatalog.forEach(m => {
     if (existing.has(m.id_materia)) return;
 
     const approved = !!approvedMap[m.id_materia];
@@ -1277,6 +1402,8 @@ function syncCatalogRows_(payload) {
 
 
 // Devuelve resumen por división: cantidad de estudiantes en riesgo (>= umbral adeudadas)
+// payload: { ciclo_lectivo, umbral?:number }
+ por división: cantidad de estudiantes en riesgo (>= umbral adeudadas)
 // payload: { ciclo_lectivo, umbral?:number }
 function getDivisionRiskSummary_(payload) {
   const ciclo = String(payload.ciclo_lectivo || '').trim();
