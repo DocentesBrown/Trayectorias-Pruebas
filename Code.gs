@@ -308,9 +308,6 @@ function rolloverCycle_(payload) {
   const students = getStudentList_({}); // activos
   const catalog = getCatalog_();
 
-  const catalogById = {};
-  catalog.forEach(m => { const mid = String(m.id_materia || '').trim(); if (mid) catalogById[mid] = m; });
-
   const sh = sheet_(SHEETS.ESTADO);
 
   // --- 1) Crear filas faltantes del ciclo destino (como antes) ---
@@ -350,7 +347,13 @@ function rolloverCycle_(payload) {
       if (!sid) return;
 
       const cond = String(r[idx['condicion_academica']] || '').trim().toLowerCase();
-      if (cond !== 'adeuda') return;
+      const rc = (idx['resultado_cierre'] !== undefined) ? String(r[idx['resultado_cierre']] || '').trim().toLowerCase() : '';
+      const aprobo = (cond === 'aprobada' || rc === 'aprobada' || rc === 'aprobo' || rc === 'aprobó' || rc === 'si' || rc === 'sí');
+      const noAprobo = (rc === 'no_aprobada' || rc === 'no aprobada' || rc === 'no_aprobo' || rc === 'no aprobó' || rc === 'no');
+
+      if (aprobo) return; // ya aprobó (aunque aún no se haya aplicado el cierre)
+      const isOwed = (cond === 'adeuda') || noAprobo;
+      if (!isOwed) return;
 
       const mid = String(r[idx['id_materia']] || '').trim();
       if (!mid) return;
@@ -408,43 +411,14 @@ function rolloverCycle_(payload) {
     const targetGrade = (!isNaN(oldYear) && oldYear > 0) ? (updateStudents ? Math.min(oldYear + 1, 6) : Math.min(oldYear, 6)) : null;
     const sDest = Object.assign({}, s, { anio_actual: targetGrade });
 
-    // Materias del año destino (solo el año que corresponde) + adeudadas del ciclo origen (para no inflar filas).
-    // Nota: evitamos crear filas de años anteriores que NO son adeudadas, porque eso multiplica filas y ralentiza la planilla.
-    let allowedCatalogBase = [];
-    if (targetGrade) {
-      allowedCatalogBase = catalog.filter(m => {
-        const mid = String(m.id_materia || '').trim();
-        if (!mid) return false;
-
-        const my = Number(m.anio || '');
-        const isSameYear = (!isNaN(my) && my === targetGrade);
-        const isNoYear = (isNaN(my) || my <= 0); // materias comunes sin año explícito
-
-        if (!(isSameYear || isNoYear)) return false;
-        return catalogAplicaAStudent_(m, targetGrade, sDest.orientacion);
-      });
-    } else {
-      // Sin año definido: fallback seguro (no debería pasar)
-      allowedCatalogBase = filterCatalogForStudent_(catalog, sDest);
-    }
-
-    // Sumar adeudadas del ciclo origen (si existe) para que queden para el próximo ciclo.
-    const owedSet = origenExiste ? (owedInOrigen0[sid] || null) : null;
-    if (owedSet) {
-      Object.keys(owedSet).forEach(mid => {
-        if (!mid) return;
-        const already = allowedCatalogBase.some(x => String(x.id_materia || '').trim() === mid);
-        if (already) return;
-        const cm = catalogById[mid];
-        if (cm) allowedCatalogBase.push(cm);
-        else allowedCatalogBase.push({ id_materia: mid, nombre: '', anio: null, es_troncal: false, orientacion: '' });
-      });
-    }
+    // Catálogo filtrado por orientación (si aplica)
+    const allowedCatalogBase = filterCatalogForStudent_(catalog, sDest);
 
     // Si egresó (venía de 6º en el ciclo origen), en el ciclo destino solo seguimos las materias ADEUDADAS
     // para que pueda cerrar pendientes sin “cargar” materias nuevas.
     let allowedCatalog = allowedCatalogBase;
     if (updateStudents && oldYear === 6 && origenExiste) {
+      const owedSet = owedInOrigen0[sid] || null;
       allowedCatalog = owedSet ? allowedCatalogBase.filter(m => !!owedSet[String(m.id_materia || '').trim()]) : [];
     }
 
@@ -520,39 +494,59 @@ function rolloverCycle_(payload) {
     catalogYearByMid[mid] = y;
   });
 
-  // Adeudadas del ciclo origen (solo si existe)
-  // Solo cuentan adeudadas de años que el/la estudiante ya debía haber cursado en el ciclo origen
-  // (evita que materias de años futuros se consideren “adeudadas”).
-  const owedByStudent = {};
-  if (origenExiste) {
-    rows.forEach(r => {
-      const c = String(r[idx['ciclo_lectivo']] || '').trim();
-      if (c !== origen) return;
+  // Adeudadas para armar el plan del ciclo destino.
+  // Importante: NO dependemos de que exista una fila en el ciclo origen para cada materia.
+  // Las adeudadas se derivan del catálogo (hasta el año cursado en el origen) y del historial de aprobaciones.
+  const owedByStudent = {}; // sid -> [mid]
 
-      const sid = String(r[idx['id_estudiante']] || '').trim();
-      if (!activeSet[sid]) return;
+  // Orden estable: primero por año, luego por id (para que intensificación tome las más antiguas)
+  const catalogMeta = {}; // mid -> {anio}
+  catalog.forEach(m => {
+    const mid = String(m.id_materia || '').trim();
+    if (!mid) return;
+    const y = Number(m.anio || '');
+    catalogMeta[mid] = { anio: (!isNaN(y) ? y : null) };
+  });
 
-      const mid = String(r[idx['id_materia']] || '').trim();
-      if (!mid) return;
+  students.forEach(s => {
+    const sid = s.id_estudiante;
+    if (!activeSet[sid]) return;
 
-      const cond = String(r[idx['condicion_academica']] || '').trim().toLowerCase();
-      if (cond !== 'adeuda') return;
+    const oldYear = oldYearByStudent[sid];
+    if (!oldYear) return;
 
-      const oldYear = oldYearByStudent[sid];
-      const matYear = catalogYearByMid[mid] || null;
+    const owed = [];
 
-      // Si no tenemos año de la materia, la dejamos contar (mejor no ocultar adeudas reales)
-      const isFutureInOrigen = (oldYear && matYear && matYear > oldYear);
-      if (isFutureInOrigen) return;
+    for (let i = 0; i < catalog.length; i++) {
+      const m = catalog[i];
+      const mid = String(m.id_materia || '').trim();
+      if (!mid) continue;
 
-      if (!owedByStudent[sid]) owedByStudent[sid] = [];
-      owedByStudent[sid].push(mid);
+      // Respeta orientación (si aplica)
+      if (!catalogAplicaAStudent_(m, oldYear, s.orientacion)) continue;
+
+      const my = Number(m.anio || '');
+      // No incluir materias de años posteriores al cursado en el origen
+      if (!isNaN(my) && my > 0 && my > oldYear) continue;
+
+      // Si ya aprobó (en cualquier ciclo anterior o por resultado_cierre en origen), no es adeuda
+      const key = sid + '|' + mid;
+      if (approvedMap[key]) continue;
+
+      owed.push(mid);
+    }
+
+    owed.sort((a,b) => {
+      const ya = (catalogMeta[a] && catalogMeta[a].anio) || 999;
+      const yb = (catalogMeta[b] && catalogMeta[b].anio) || 999;
+      return (ya - yb) || String(a).localeCompare(String(b));
     });
-  }
+
+    owedByStudent[sid] = owed;
+  });
 
 // Map row index (destino) for fast updates
   const destRowIndex = {}; // sid|mid -> i
-  const destMidsByStudent = {}; // sid -> [mid]
   rows.forEach((r, i) => {
     const c = String(r[idx['ciclo_lectivo']] || '').trim();
     if (c !== destino) return;
@@ -561,8 +555,6 @@ function rolloverCycle_(payload) {
     if (!sid || !mid) return;
     if (!activeSet[sid]) return;
     destRowIndex[sid + '|' + mid] = i;
-    if (!destMidsByStudent[sid]) destMidsByStudent[sid] = [];
-    destMidsByStudent[sid].push(mid);
   });
 
   // Primero: resetear campos del destino para estudiantes activos (para evitar basura previa)
@@ -608,30 +600,8 @@ function rolloverCycle_(payload) {
     const newYear = newGradeByStudent[sid];
     if (!newYear) return;
 
-    // Solo tomamos materias que realmente existen en el ciclo destino para este estudiante,
-    // y que aplican por orientación (evita “priorizar” materias que no fueron creadas).
-    const destMids = (destMidsByStudent[sid] || []).slice();
-
-    const newYearMats = destMids
-      .filter(mid => {
-        const key = sid + '|' + mid;
-        const ri = destRowIndex[key];
-        if (ri === undefined) return false;
-        const condLc = String(rows[ri][idx['condicion_academica']] || '').trim().toLowerCase();
-        if (condLc === 'aprobada') return false;
-        const my = catalogYearByMid[mid] || null;
-        return (my && my === newYear);
-      });
-
-    // Adeudadas del origen, pero solo si existen como fila en el destino (porque no inflamos con catálogo completo)
-    let owedAll = (owedByStudent[sid] || []).slice().filter(mid => destRowIndex[sid + '|' + mid] !== undefined);
-
-    // Orden: primero las más “viejas” (año menor) para intensificación / recursada
-    owedAll.sort((a, b) => {
-      const ya = catalogYearByMid[a] || 999;
-      const yb = catalogYearByMid[b] || 999;
-      return (ya - yb) || String(a).localeCompare(String(b));
-    });
+    const newYearMats = (catalogByYear[newYear] || []).slice();
+    const owedAll = (owedByStudent[sid] || []).slice();
 
     // Tope: intensifica máx 4 adeudadas
     const intensifica = owedAll.slice(0, 4);
@@ -1211,21 +1181,7 @@ function syncCatalogRows_(payload) {
   const grade = Number(student.anio_actual || '');
 
   const catalogFull = getCatalog_();
-
-  // Optimización: agregamos SOLO materias del año actual (y comunes sin año), no todo <= año.
-  // Las adeudadas de años anteriores se arrastran por rollover, así no inflamos filas.
-  let catalog = [];
-  if (!isNaN(grade) && grade > 0) {
-    catalog = (catalogFull || []).filter(m => {
-      if (!catalogAplicaAStudent_(m, grade, student.orientacion)) return false;
-      const my = Number(m.anio || '');
-      const isSameYear = (!isNaN(my) && my === grade);
-      const isNoYear = (isNaN(my) || my <= 0);
-      return isSameYear || isNoYear;
-    });
-  } else {
-    catalog = filterCatalogForStudent_(catalogFull, student);
-  }
+  const catalog = filterCatalogForStudent_(catalogFull, student);
 
   const sh = sheet_(SHEETS.ESTADO);
   const { headers, rows } = getValues_(sh);
@@ -1428,18 +1384,9 @@ function closeCycle_(payload) {
     const aprobo = (rc === 'aprobada' || rc === 'aprobo' || rc === 'aprobó' || rc === 'si' || rc === 'sí');
     const noAprobo = (rc === 'no_aprobada' || rc === 'no aprobada' || rc === 'no_aprobo' || rc === 'no aprobó' || rc === 'no');
 
-    if (aprobo) {
-      row[idx['condicion_academica']] = 'aprobada';
-      if (idx['nunca_cursada'] !== undefined) row[idx['nunca_cursada']] = false;
-      if (idx['situacion_actual'] !== undefined) row[idx['situacion_actual']] = 'no_cursa_otro_motivo';
-      if (idx['motivo_no_cursa'] !== undefined) row[idx['motivo_no_cursa']] = 'Aprobada (cierre)';
-    } else if (noAprobo) {
-      row[idx['condicion_academica']] = 'adeuda';
-      // Si tuvo resultado de cierre, ya NO es "nunca cursada" (aunque no haya aprobado)
-      if (idx['nunca_cursada'] !== undefined) row[idx['nunca_cursada']] = false;
-      if (idx['situacion_actual'] !== undefined) row[idx['situacion_actual']] = 'no_cursa_otro_motivo';
-      if (idx['motivo_no_cursa'] !== undefined) row[idx['motivo_no_cursa']] = 'No aprobada (adeuda)';
-    } else continue; // valor desconocido
+    if (aprobo) row[idx['condicion_academica']] = 'aprobada';
+    else if (noAprobo) row[idx['condicion_academica']] = 'adeuda';
+    else continue; // valor desconocido
 
     if (marcarCerrado && idx['ciclo_cerrado'] !== undefined) row[idx['ciclo_cerrado']] = true;
     if (idx['fecha_actualizacion'] !== undefined) row[idx['fecha_actualizacion']] = now;

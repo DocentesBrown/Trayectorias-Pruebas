@@ -367,7 +367,7 @@ function computeBuckets(materias, student) {
     const cond = (m.condicion_academica || '').trim().toLowerCase();
     const sit = (m.situacion_actual || '').trim();
 
-    if (cond === 'aprobada') { buckets.aprobadas.push(m); return; }
+    if (cond === 'aprobada') buckets.aprobadas.push(m);
     if (cond === 'adeuda') {
       // Contar como "adeuda" SOLO las materias de años anteriores (no año en curso ni futuros)
       const sitLc = String(sit || '').trim();
@@ -395,8 +395,6 @@ function computeBuckets(materias, student) {
 function counts(materias) {
   let regular = 0, intens = 0;
   materias.forEach(m => {
-    const cond = String(m.condicion_academica || '').trim().toLowerCase();
-    if (cond === 'aprobada') return; // no cuenta como carga de cursada
     const sit = (m.situacion_actual || '').trim();
     if (sit === 'cursa_primera_vez' || sit === 'recursa') regular++;
     if (sit === 'intensifica') intens++;
