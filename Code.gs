@@ -681,9 +681,21 @@ function catalogAplicaAStudent_(catMateria, studentGrade, studentOrient) {
 }
 
 function filterCatalogForStudent_(catalog, student) {
-  const grade = Number(student && student.anio_actual || '');
+  // Filtra por orientación (si aplica) y por año (no muestra materias de años posteriores).
+  // Esto reduce filas y acelera la app: las materias futuras se crean recién cuando corresponden.
+  const gradeRaw = student && (student.anio_actual !== undefined ? student.anio_actual : student.anio);
+  const grade = Number(gradeRaw || '');
   const orient = student ? student.orientacion : '';
-  return (catalog || []).filter(m => catalogAplicaAStudent_(m, grade, orient));
+  const hasGrade = !isNaN(grade) && grade > 0;
+
+  return (catalog || []).filter(m => {
+    if (!catalogAplicaAStudent_(m, hasGrade ? grade : null, orient)) return false;
+
+    const my = Number(m && m.anio || '');
+    if (!hasGrade) return true;              // sin dato: no recortamos
+    if (isNaN(my) || my <= 0) return true;   // materias sin año explícito: se mantienen
+    return my <= grade;                      // NO incluir años posteriores
+  });
 }
 
 
@@ -1138,6 +1150,7 @@ function syncCatalogRows_(payload) {
   // Estudiante (para filtrar catálogo por orientación)
   const students = getStudentList_();
   const student = students.find(s => s.id_estudiante === idEst) || { id_estudiante: idEst, anio_actual: null, orientacion: '' };
+  const isEgresado = !!student.egresado;
   const grade = Number(student.anio_actual || '');
 
   const catalogFull = getCatalog_();
@@ -1185,6 +1198,14 @@ function syncCatalogRows_(payload) {
   const now = new Date();
   let added = 0;
 
+  // Si es egresado/a, NO agregamos materias nuevas automáticamente.
+  // El rollover ya dejó solo las adeudadas para que pueda cerrar pendientes sin inflar filas.
+  if (isEgresado) {
+    return { added: 0, status: getStudentStatus_({ ciclo_lectivo: ciclo, id_estudiante: idEst }) };
+  }
+
+  const toAppend = [];
+
   catalog.forEach(m => {
     if (existing.has(m.id_materia)) return;
 
@@ -1222,18 +1243,18 @@ function syncCatalogRows_(payload) {
     if (obj.hasOwnProperty('fecha_actualizacion')) obj['fecha_actualizacion'] = now;
     if (obj.hasOwnProperty('usuario')) obj['usuario'] = usuario;
 
-    sh.appendRow(headers.map(h => obj[h]));
+    toAppend.push(headers.map(h => obj[h]));
+    existing.add(m.id_materia);
     added++;
   });
+
+  if (toAppend.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, toAppend.length, headers.length).setValues(toAppend);
+  }
 
   return { added, status: getStudentStatus_({ ciclo_lectivo: ciclo, id_estudiante: idEst }) };
 }
 
-
-
-
-// Devuelve resumen por división: cantidad de estudiantes en riesgo (>= umbral adeudadas)
-// payload: { ciclo_lectivo, umbral?:number }
 function getDivisionRiskSummary_(payload) {
   const ciclo = String(payload.ciclo_lectivo || '').trim();
   const umbral = (payload.umbral !== undefined) ? Number(payload.umbral) : 5;
